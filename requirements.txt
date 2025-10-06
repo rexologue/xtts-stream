@@ -1,0 +1,15 @@
+coqpit>=0.0.17
+fsspec
+librosa
+noisereduce
+numpy
+num2words
+packaging
+scipy
+soundfile
+spacy>=3.0.0
+text-unidecode
+tokenizers
+torch
+torchaudio
+transformers

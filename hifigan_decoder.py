@@ -1,10 +1,11 @@
 import logging
+from typing import Any
 
 import torch
-from trainer.io import load_fsspec
 
-from TTS.encoder.models.resnet import ResNetSpeakerEncoder
-fromhifigan_generator import HifiganGenerator
+from generic_utils import load_fsspec
+from hifigan_generator import HifiganGenerator
+from resnet import ResNetSpeakerEncoder
 
 logger = logging.getLogger(__name__)
 
@@ -12,34 +13,46 @@ logger = logging.getLogger(__name__)
 class HifiDecoder(torch.nn.Module):
     def __init__(
         self,
-        input_sample_rate=22050,
-        output_sample_rate=24000,
-        output_hop_length=256,
-        ar_mel_length_compression=1024,
-        decoder_input_dim=1024,
-        resblock_type_decoder="1",
-        resblock_dilation_sizes_decoder=[[1, 3, 5], [1, 3, 5], [1, 3, 5]],
-        resblock_kernel_sizes_decoder=[3, 7, 11],
-        upsample_rates_decoder=[8, 8, 2, 2],
-        upsample_initial_channel_decoder=512,
-        upsample_kernel_sizes_decoder=[16, 16, 4, 4],
-        d_vector_dim=512,
-        cond_d_vector_in_each_upsampling_layer=True,
-        speaker_encoder_audio_config={
-            "fft_size": 512,
-            "win_length": 400,
-            "hop_length": 160,
-            "sample_rate": 16000,
-            "preemphasis": 0.97,
-            "num_mels": 64,
-        },
+        input_sample_rate: int = 22050,
+        output_sample_rate: int = 24000,
+        output_hop_length: int = 256,
+        ar_mel_length_compression: int = 1024,
+        decoder_input_dim: int = 1024,
+        resblock_type_decoder: str = "1",
+        resblock_dilation_sizes_decoder: list[list[int]] | None = None,
+        resblock_kernel_sizes_decoder: list[int] | None = None,
+        upsample_rates_decoder: list[int] | None = None,
+        upsample_initial_channel_decoder: int = 512,
+        upsample_kernel_sizes_decoder: list[int] | None = None,
+        d_vector_dim: int = 512,
+        cond_d_vector_in_each_upsampling_layer: bool = True,
+        speaker_encoder_audio_config: dict[str, Any] | None = None,
     ):
         super().__init__()
+        if resblock_dilation_sizes_decoder is None:
+            resblock_dilation_sizes_decoder = [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
+        if resblock_kernel_sizes_decoder is None:
+            resblock_kernel_sizes_decoder = [3, 7, 11]
+        if upsample_rates_decoder is None:
+            upsample_rates_decoder = [8, 8, 2, 2]
+        if upsample_kernel_sizes_decoder is None:
+            upsample_kernel_sizes_decoder = [16, 16, 4, 4]
+        if speaker_encoder_audio_config is None:
+            speaker_encoder_audio_config = {
+                "fft_size": 512,
+                "win_length": 400,
+                "hop_length": 160,
+                "sample_rate": 16000,
+                "preemphasis": 0.97,
+                "num_mels": 64,
+            }
+
         self.input_sample_rate = input_sample_rate
         self.output_sample_rate = output_sample_rate
         self.output_hop_length = output_hop_length
         self.ar_mel_length_compression = ar_mel_length_compression
         self.speaker_encoder_audio_config = speaker_encoder_audio_config
+
         self.waveform_decoder = HifiganGenerator(
             decoder_input_dim,
             1,
@@ -64,65 +77,32 @@ class HifiDecoder(torch.nn.Module):
             audio_config=speaker_encoder_audio_config,
         )
 
-    @property
-    def device(self):
-        return next(self.parameters()).device
-
-    def forward(self, latents, g=None):
-        """
-        Args:
-            x (Tensor): feature input tensor (GPT latent).
-            g (Tensor): global conditioning input tensor.
-
-        Returns:
-            Tensor: output waveform.
-
-        Shapes:
-            x: [B, C, T]
-            Tensor: [B, 1, T]
-        """
-
+    def forward(self, latents: torch.Tensor, g: torch.Tensor | None = None) -> torch.Tensor:
         z = torch.nn.functional.interpolate(
             latents.transpose(1, 2),
             scale_factor=[self.ar_mel_length_compression / self.output_hop_length],
             mode="linear",
         ).squeeze(1)
-        # upsample to the right sr
         if self.output_sample_rate != self.input_sample_rate:
             z = torch.nn.functional.interpolate(
                 z,
                 scale_factor=[self.output_sample_rate / self.input_sample_rate],
                 mode="linear",
             ).squeeze(0)
-        o = self.waveform_decoder(z, g=g)
-        return o
+        return self.waveform_decoder(z, g=g)
 
     @torch.inference_mode()
-    def inference(self, c, g):
-        """
-        Args:
-            x (Tensor): feature input tensor (GPT latent).
-            g (Tensor): global conditioning input tensor.
-
-        Returns:
-            Tensor: output waveform.
-
-        Shapes:
-            x: [B, C, T]
-            Tensor: [B, 1, T]
-        """
+    def inference(self, c: torch.Tensor, g: torch.Tensor) -> torch.Tensor:
         return self.forward(c, g=g)
 
-    def load_checkpoint(self, checkpoint_path, eval=False):  # pylint: disable=unused-argument, redefined-builtin
+    def load_checkpoint(self, checkpoint_path: str, eval: bool = False) -> None:  # pylint: disable=redefined-builtin
         state = load_fsspec(checkpoint_path, map_location=torch.device("cpu"))
-        # remove unused keys
         state = state["model"]
-        states_keys = list(state.keys())
-        for key in states_keys:
-            if "waveform_decoder." not in key and "speaker_encoder." not in key:
+        keys = list(state.keys())
+        for key in keys:
+            if not (key.startswith("waveform_decoder.") or key.startswith("speaker_encoder.")):
                 del state[key]
-
-        self.load_state_dict(state)
+        self.load_state_dict(state, strict=False)
         if eval:
             self.eval()
             assert not self.training
