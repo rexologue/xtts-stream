@@ -3,7 +3,7 @@ from torch import nn
 from transformers import GenerationMixin, GPT2PreTrainedModel
 from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions
 
-from TTS.tts.layers.xtts.stream_generator import StreamGenerationConfig
+from stream_generator import StreamGenerationConfig
 
 
 class GPT2InferenceModel(GPT2PreTrainedModel, GenerationMixin):

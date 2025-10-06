@@ -9,7 +9,7 @@ import torch
 import torch.nn.functional as F
 import torchaudio
 from coqpit import Coqpit
-from trainer.io import load_fsspec
+from generic_utils import load_fsspec
 from scipy.signal import butter, lfilter
 import noisereduce as nr
 import numpy as np

@@ -8,8 +8,8 @@ import torch
 from num2words import num2words
 from tokenizers import Tokenizer
 
-from zh_num2words import TextNorm as zh_num2words
 from text.cleaners import collapse_whitespace, lowercase
+from zh_num2words import TextNorm as zh_num2words
 
 logger = logging.getLogger(__name__)
 
@@ -609,7 +609,7 @@ def korean_transliterate(text):
     return r.translit(text)
 
 
-DEFAULT_VOCAB_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "../data/tokenizer.json")
+DEFAULT_VOCAB_FILE = None
 
 
 class VoiceBpeTokenizer:
