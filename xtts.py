@@ -339,14 +339,45 @@ class Xtts(BaseTTS):
         )
 
     def _clone_voice(
-        self, speaker_wav: str | os.PathLike[Any] | list[str | os.PathLike[Any]], **generate_kwargs: Any
+        self,
+        speaker_wav: str | os.PathLike[Any] | list[str | os.PathLike[Any]],
+        speaker: str | None = None,
+        voice_dir: str | os.PathLike[Any] | None = None,
+        **generate_kwargs: Any,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
+        cache_path: Path | None = None
+        if speaker and voice_dir:
+            cache_path = Path(voice_dir) / f"{speaker}.pt"
+            if cache_path.is_file():
+                payload = torch.load(cache_path, map_location=self.device)
+                voice = payload.get("voice", payload)
+                voice = {
+                    key: value.to(self.device) if torch.is_tensor(value) else value
+                    for key, value in voice.items()
+                }
+                metadata = payload.get("metadata", {"name": self.config["model"]})
+                if self.speaker_manager is not None:
+                    self.speaker_manager.speakers[speaker] = voice
+                return voice, metadata
+
         gpt_conditioning_latents, speaker_embedding = self.get_conditioning_latents(
             audio_path=speaker_wav,
             **generate_kwargs,
         )
         voice = {"gpt_conditioning_latents": gpt_conditioning_latents, "speaker_embedding": speaker_embedding}
         metadata = {"name": self.config["model"]}
+
+        if speaker and self.speaker_manager is not None:
+            self.speaker_manager.speakers[speaker] = voice
+
+        if cache_path is not None:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            serializable_voice = {
+                key: value.detach().cpu() if torch.is_tensor(value) else value
+                for key, value in voice.items()
+            }
+            torch.save({"voice": serializable_voice, "metadata": metadata}, cache_path)
+
         return voice, metadata
 
     @torch.inference_mode()
