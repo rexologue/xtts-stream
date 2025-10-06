@@ -199,7 +199,7 @@ class Xtts(BaseTTS):
     """
 
     def __init__(self, config: Coqpit):
-        super().__init__(config, ap=None, tokenizer=None)
+        super().__init__(config)
         self.mel_stats_path = None
         self.config = config
         self.gpt_checkpoint = self.args.gpt_checkpoint
