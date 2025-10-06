@@ -746,6 +746,64 @@ class Xtts(BaseTTS):
             if key.split(".")[0] in ignore_keys:
                 del checkpoint[key]
 
+        # Rename legacy speaker encoder torch spectrogram buffers
+        legacy_torch_spec_keys = {
+            "hifigan_decoder.speaker_encoder.torch_spec.0.filter": "hifigan_decoder.speaker_encoder.torch_spec.kernel",
+            "hifigan_decoder.speaker_encoder.torch_spec.1.spectrogram.window": "hifigan_decoder.speaker_encoder.torch_spec.base.spectrogram.window",
+            "hifigan_decoder.speaker_encoder.torch_spec.1.mel_scale.fb": "hifigan_decoder.speaker_encoder.torch_spec.base.mel_scale.fb",
+        }
+        for old_key, new_key in legacy_torch_spec_keys.items():
+            if old_key in checkpoint and new_key not in checkpoint:
+                checkpoint[new_key] = checkpoint.pop(old_key)
+
+        # Legacy checkpoints may miss the nested `gpt` prefix that mirrors the module hierarchy
+        if any(key.startswith("gpt.transformer.") for key in checkpoint):
+            for key in list(checkpoint.keys()):
+                if key.startswith("gpt.transformer."):
+                    new_key = key.replace("gpt.transformer.", "gpt.gpt.transformer.", 1)
+                    checkpoint[new_key] = checkpoint.pop(key)
+                elif key.startswith("gpt.ln_f."):
+                    new_key = key.replace("gpt.ln_f.", "gpt.gpt.ln_f.", 1)
+                    checkpoint[new_key] = checkpoint.pop(key)
+                elif key.startswith("gpt.wte."):
+                    new_key = key.replace("gpt.wte.", "gpt.gpt.wte.", 1)
+                    checkpoint[new_key] = checkpoint.pop(key)
+
+        # Ensure inference module aliases exist so `strict=True` loads succeed
+        def ensure_alias(src_prefix: str, dst_prefix: str):
+            for key in list(checkpoint.keys()):
+                if key.startswith(src_prefix):
+                    alias_key = key.replace(src_prefix, dst_prefix, 1)
+                    if alias_key not in checkpoint:
+                        checkpoint[alias_key] = checkpoint[key]
+
+        ensure_alias("gpt.gpt.", "gpt.gpt_inference.transformer.")
+
+        alias_pairs = [
+            ("gpt.mel_embedding.weight", [
+                "gpt.gpt.wte.weight",
+                "gpt.gpt_inference.embeddings.weight",
+                "gpt.gpt_inference.transformer.wte.weight",
+            ]),
+            ("gpt.mel_pos_embedding.emb.weight", ["gpt.gpt_inference.pos_embedding.emb.weight"]),
+            ("gpt.final_norm.weight", [
+                "gpt.gpt_inference.final_norm.weight",
+                "gpt.gpt_inference.lm_head.0.weight",
+            ]),
+            ("gpt.final_norm.bias", [
+                "gpt.gpt_inference.final_norm.bias",
+                "gpt.gpt_inference.lm_head.0.bias",
+            ]),
+            ("gpt.mel_head.weight", ["gpt.gpt_inference.lm_head.1.weight"]),
+            ("gpt.mel_head.bias", ["gpt.gpt_inference.lm_head.1.bias"]),
+        ]
+
+        for source_key, targets in alias_pairs:
+            if source_key in checkpoint:
+                for target_key in targets:
+                    if target_key not in checkpoint:
+                        checkpoint[target_key] = checkpoint[source_key]
+
         return checkpoint
 
     def load_checkpoint(
