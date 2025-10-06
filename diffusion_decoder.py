@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from TTS.tts.layers.tortoise.arch_utils import AttentionBlock, normalization
+from arch_utils import AttentionBlock, normalization
 
 
 def is_latent(t):

@@ -4,7 +4,7 @@ import torch
 from trainer.io import load_fsspec
 
 from TTS.encoder.models.resnet import ResNetSpeakerEncoder
-from TTS.vocoder.models.hifigan_generator import HifiganGenerator
+fromhifigan_generator import HifiganGenerator
 
 logger = logging.getLogger(__name__)
 

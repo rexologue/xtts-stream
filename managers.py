@@ -7,10 +7,9 @@ import fsspec
 import numpy as np
 import torch
 
-from TTS.config import load_config
-from TTS.encoder.utils.generic_utils import setup_encoder_model
-from TTS.utils.audio import AudioProcessor
-from TTS.utils.generic_utils import is_pytorch_at_least_2_4
+from shared_configs import load_config
+from generic_utils import setup_encoder_model, is_pytorch_at_least_2_4
+from audio.processor import AudioProcessor
 
 
 def load_file(path: str | os.PathLike[Any]) -> Any:

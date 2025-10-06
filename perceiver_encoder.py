@@ -9,8 +9,8 @@ from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
 from torch import einsum, nn
 
-from TTS.tts.layers.tortoise.transformer import GEGLU
-from TTS.utils.generic_utils import default, exists
+from transformer import GEGLU
+from generic_utils import default, exists
 
 
 def once(fn):

@@ -1,6 +1,6 @@
 import torch
 
-from TTS.utils.generic_utils import is_pytorch_at_least_2_4
+from generic_utils import is_pytorch_at_least_2_4
 
 
 def rehash_fairseq_vits_checkpoint(checkpoint_file):

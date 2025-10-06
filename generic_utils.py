@@ -1,5 +1,9 @@
 import os
 import re
+import sys
+import glob
+import fsspec
+import random
 import logging
 import datetime
 import warnings
@@ -12,6 +16,12 @@ from typing import Any, TextIO, TypeVar
 import torch
 from typing_extensions import TypeIs
 from packaging.version import Version
+
+import numpy as np
+from scipy import signal
+
+from base_encoder import BaseEncoder
+from resnet import ResNetSpeakerEncoder
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +114,57 @@ def format_aux_input(def_args: dict, kwargs: dict) -> dict:
 def get_timestamp() -> str:
     return datetime.datetime.now().strftime("%y%m%d-%H%M%S")
 
+def get_user_data_dir(appname: str) -> Path:
+    TTS_HOME = os.environ.get("TTS_HOME")
+    XDG_DATA_HOME = os.environ.get("XDG_DATA_HOME")
+    if TTS_HOME is not None:
+        ans = Path(TTS_HOME).expanduser().resolve(strict=False)
+    elif XDG_DATA_HOME is not None:
+        ans = Path(XDG_DATA_HOME).expanduser().resolve(strict=False)
+    elif sys.platform == "win32":
+        import winreg  # pylint: disable=import-outside-toplevel
+
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders"
+        )
+        dir_, _ = winreg.QueryValueEx(key, "Local AppData")
+        ans = Path(dir_).resolve(strict=False)
+    elif sys.platform == "darwin":
+        ans = Path("~/Library/Application Support/").expanduser()
+    else:
+        ans = Path.home().joinpath(".local/share")
+    return ans.joinpath(appname)
+
+def load_fsspec(
+    path: str | os.PathLike[Any],
+    map_location: str | torch.device | dict[str, str] | None = None,
+    *,
+    cache: bool = True,
+    **kwargs: Any,
+) -> Any:
+    """Like torch.load but can load from other locations (e.g. s3:// , gs://).
+
+    Args:
+        path: Any path or url supported by fsspec.
+        map_location: torch.device or str.
+        cache: If True, cache a remote file locally for subsequent calls. It is cached under `get_user_data_dir()/trainer_cache`. Defaults to True.
+        **kwargs: Keyword arguments forwarded to torch.load.
+
+    Returns:
+        Object stored in path.
+    """
+    is_local = Path(path).exists()
+    if cache and not is_local:
+        with fsspec.open(
+            f"filecache::{path}",
+            filecache={"cache_storage": str(get_user_data_dir("tts_cache"))},
+            mode="rb",
+        ) as f:
+            return torch.load(f, map_location=map_location, weights_only=False, **kwargs)
+    else:
+        with fsspec.open(str(path), "rb") as f:
+            return torch.load(f, map_location=map_location, weights_only=False, **kwargs)
+
 
 class ConsoleFormatter(logging.Formatter):
     """Custom formatter that prints logging.INFO messages without the level name.
@@ -178,3 +239,127 @@ def warn_synthesize_speaker_id_deprecated() -> None:
         "The `speaker_id` argument of synthesize() is deprecated and will be removed soon. Use `speaker` instead.",
         DeprecationWarning,
     )
+
+
+class AugmentWAV:
+    def __init__(self, ap, augmentation_config):
+        self.ap = ap
+        self.use_additive_noise = False
+
+        if "additive" in augmentation_config.keys():
+            self.additive_noise_config = augmentation_config["additive"]
+            additive_path = self.additive_noise_config["sounds_path"]
+            if additive_path:
+                self.use_additive_noise = True
+                # get noise types
+                self.additive_noise_types = []
+                for key in self.additive_noise_config.keys():
+                    if isinstance(self.additive_noise_config[key], dict):
+                        self.additive_noise_types.append(key)
+
+                additive_files = glob.glob(os.path.join(additive_path, "**/*.wav"), recursive=True)
+
+                self.noise_list = {}
+
+                for wav_file in additive_files:
+                    noise_dir = wav_file.replace(additive_path, "").split(os.sep)[0]
+                    # ignore not listed directories
+                    if noise_dir not in self.additive_noise_types:
+                        continue
+                    if noise_dir not in self.noise_list:
+                        self.noise_list[noise_dir] = []
+                    self.noise_list[noise_dir].append(wav_file)
+
+                logger.info(
+                    "Using Additive Noise Augmentation: with %d audios instances from %s",
+                    len(additive_files),
+                    self.additive_noise_types,
+                )
+
+        self.use_rir = False
+
+        if "rir" in augmentation_config.keys():
+            self.rir_config = augmentation_config["rir"]
+            if self.rir_config["rir_path"]:
+                self.rir_files = glob.glob(os.path.join(self.rir_config["rir_path"], "**/*.wav"), recursive=True)
+                self.use_rir = True
+
+            logger.info("Using RIR Noise Augmentation: with %d audios instances", len(self.rir_files))
+
+        self.create_augmentation_global_list()
+
+    def create_augmentation_global_list(self):
+        if self.use_additive_noise:
+            self.global_noise_list = self.additive_noise_types
+        else:
+            self.global_noise_list = []
+        if self.use_rir:
+            self.global_noise_list.append("RIR_AUG")
+
+    def additive_noise(self, noise_type, audio):
+        clean_db = 10 * np.log10(np.mean(audio**2) + 1e-4)
+
+        noise_list = random.sample(
+            self.noise_list[noise_type],
+            random.randint(
+                self.additive_noise_config[noise_type]["min_num_noises"],
+                self.additive_noise_config[noise_type]["max_num_noises"],
+            ),
+        )
+
+        audio_len = audio.shape[0]
+        noises_wav = None
+        for noise in noise_list:
+            noiseaudio = self.ap.load_wav(noise, sr=self.ap.sample_rate)[:audio_len]
+
+            if noiseaudio.shape[0] < audio_len:
+                continue
+
+            noise_snr = random.uniform(
+                self.additive_noise_config[noise_type]["min_snr_in_db"],
+                self.additive_noise_config[noise_type]["max_num_noises"],
+            )
+            noise_db = 10 * np.log10(np.mean(noiseaudio**2) + 1e-4)
+            noise_wav = np.sqrt(10 ** ((clean_db - noise_db - noise_snr) / 10)) * noiseaudio
+
+            if noises_wav is None:
+                noises_wav = noise_wav
+            else:
+                noises_wav += noise_wav
+
+        # if all possible files is less than audio, choose other files
+        if noises_wav is None:
+            return self.additive_noise(noise_type, audio)
+
+        return audio + noises_wav
+
+    def reverberate(self, audio):
+        audio_len = audio.shape[0]
+
+        rir_file = random.choice(self.rir_files)
+        rir = self.ap.load_wav(rir_file, sr=self.ap.sample_rate)
+        rir = rir / np.sqrt(np.sum(rir**2))
+        return signal.convolve(audio, rir, mode=self.rir_config["conv_mode"])[:audio_len]
+
+    def apply_one(self, audio):
+        noise_type = random.choice(self.global_noise_list)
+        if noise_type == "RIR_AUG":
+            return self.reverberate(audio)
+
+        return self.additive_noise(noise_type, audio)
+
+
+def setup_encoder_model(config: "Coqpit") -> BaseEncoder:
+    if config.model_params["model_name"].lower() == "resnet":
+        model = ResNetSpeakerEncoder(
+            input_dim=config.model_params["input_dim"],
+            proj_dim=config.model_params["proj_dim"],
+            log_input=config.model_params.get("log_input", False),
+            use_torch_spec=config.model_params.get("use_torch_spec", False),
+            audio_config=config.audio,
+        )
+    else:
+        msg = f"Model not supported: {config.model_params['model_name']}"
+        raise ValueError(msg)
+    
+    return model # type: ignore

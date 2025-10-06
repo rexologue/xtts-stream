@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from TTS.tts.layers.tortoise.arch_utils import AttentionBlock, Downsample, Upsample, normalization, zero_module
+from arch_utils import AttentionBlock, Downsample, Upsample, normalization, zero_module
 
 
 class ResBlock(nn.Module):

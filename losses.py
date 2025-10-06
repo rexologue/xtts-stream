@@ -7,9 +7,9 @@ from coqpit import Coqpit
 from torch import nn
 from torch.nn import functional
 
-from TTS.tts.utils.helpers import sequence_mask
-from TTS.tts.utils.ssim import SSIMLoss as _SSIMLoss
-from TTS.utils.audio.torch_transforms import TorchSTFT
+from helpers import sequence_mask
+from ssim import SSIMLoss as _SSIMLoss
+from audio.torch_transforms import TorchSTFT
 
 logger = logging.getLogger(__name__)
 

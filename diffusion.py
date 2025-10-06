@@ -15,7 +15,7 @@ import torch
 import torch as th
 from tqdm import tqdm
 
-from TTS.tts.layers.tortoise.dpm_solver import DPM_Solver, NoiseScheduleVP, model_wrapper
+from dpm_solver import DPM_Solver, NoiseScheduleVP, model_wrapper
 
 try:
     from k_diffusion.sampling import sample_dpmpp_2m, sample_euler_ancestral

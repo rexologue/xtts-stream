@@ -14,14 +14,14 @@ from scipy.signal import butter, lfilter
 import noisereduce as nr
 import numpy as np
 
-from TTS.tts.configs.shared_configs import BaseTTSConfig
-from TTS.tts.layers.xtts.gpt import GPT
-from TTS.tts.layers.xtts.hifigan_decoder import HifiDecoder
-from TTS.tts.layers.xtts.stream_generator import init_stream_support
-from TTS.tts.layers.xtts.tokenizer import VoiceBpeTokenizer, split_sentence
-from TTS.tts.layers.xtts.xtts_manager import LanguageManager, SpeakerManager
-from TTS.tts.models.base_tts import BaseTTS
-from TTS.utils.generic_utils import (
+from shared_configs import BaseTTSConfig
+from gpt import GPT
+from hifigan_decoder import HifiDecoder
+from stream_generator import init_stream_support
+from tokenizer import VoiceBpeTokenizer, split_sentence
+from xtts_manager import LanguageManager, SpeakerManager
+from base_tts import BaseTTS
+from generic_utils import (
     is_pytorch_at_least_2_4,
     warn_synthesize_config_deprecated,
     warn_synthesize_speaker_id_deprecated,

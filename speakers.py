@@ -6,8 +6,8 @@ import numpy as np
 import torch
 from coqpit import Coqpit
 
-from TTS.config import get_from_config_or_model_args_with_default
-from TTS.tts.utils.managers import EmbeddingManager
+from shared_configs import get_from_config_or_model_args_with_default
+from managers import EmbeddingManager
 
 logger = logging.getLogger(__name__)
 
