@@ -70,7 +70,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--stream-ctx-seconds",
         type=int,
-        default=2,
+        default=None,
         help="How much seconds of context will be used for vocoder",
     )
     return parser.parse_args()
