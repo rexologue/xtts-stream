@@ -27,7 +27,7 @@ class StreamingMetrics:
     time_to_first_audio: float | None
     real_time_factor: float | None
     latency: float  # average chunk generation time
-    
+
 from tokenizer import VoiceBpeTokenizer, split_sentence
 from xtts_manager import LanguageManager, SpeakerManager
 from base_tts import BaseTTS
@@ -270,12 +270,15 @@ class Xtts(BaseTTS):
     def _apply_noise_reduction(self, wav_chunk_numpy):
         """Применяет простое шумоподавление."""
         # reduce_noise уменьшает шум в аудио
-        reduced_noise_chunk = nr.reduce_noise(
-            y=wav_chunk_numpy, 
-            sr=self.args.output_sample_rate, 
-            stationary=True, 
-            prop_decrease=0.75
-        )
+        try:
+            reduced_noise_chunk = nr.reduce_noise(
+                y=wav_chunk_numpy, 
+                sr=self.args.output_sample_rate, 
+                stationary=True, 
+                prop_decrease=0.75
+            )
+        except:
+            reduced_noise_chunk = wav_chunk_numpy
         
         return reduced_noise_chunk
     
@@ -807,9 +810,27 @@ class Xtts(BaseTTS):
                     new_cnt = len(last_tokens)
                     ctx_tok = min(int(left_context_tokens), max(0, L - new_cnt))
 
-                    # собираем только (контекст + новый хвост) для декодера
                     decode_start = L - (ctx_tok + new_cnt)
-                    gpt_latents = torch.cat(all_latents[decode_start:], dim=0)[None, :]  # [1, ctx+new, 1024]
+                    if decode_start < 0:
+                        decode_start = 0
+
+                    window = all_latents[decode_start:]
+                    if len(window) == 0:
+                        # Нечего декодировать.
+                        if is_end:
+                            # Финальный хвост: отдай overlap и завершай.
+                            if wav_overlap is not None and wav_overlap.numel() > 0:
+                                # (По желанию: прогнать через шумодав, как для out_chunk)
+                                out_np = wav_overlap.detach().cpu().numpy()
+                                out_np = self._apply_noise_reduction(out_np)
+                                yield torch.from_numpy(out_np.copy()).to(self.device).float()
+                            break  # выходим из while
+                        else:
+                            # Ждём ещё токенов
+                            last_tokens = []
+                            continue
+                        
+                    gpt_latents = torch.cat(window, dim=0)[None, :]
 
                     if length_scale != 1.0:
                         gpt_latents = F.interpolate(
@@ -832,7 +853,6 @@ class Xtts(BaseTTS):
                     # единообразная обработка шума ДЛЯ ВСЕГО куска до разбиения (чтобы overlap и out совпадали по домену)
                     if new_wav.numel() > 0 and apply_denoise:
                         _cpu = new_wav.detach().cpu().numpy()
-                        # _cpu = self._apply_high_pass_filter(_cpu, cutoff=80)
                         _cpu = self._apply_noise_reduction(_cpu)
                         new_wav = torch.from_numpy(_cpu.copy()).to(self.device).float()
 
@@ -913,7 +933,13 @@ class Xtts(BaseTTS):
         super().eval()
 
     def get_compatible_checkpoint_state_dict(self, model_path):
-        checkpoint = load_fsspec(model_path, map_location=torch.device("cpu"))["model"]
+        _checkpoint = load_fsspec(model_path, map_location=torch.device("cpu"))
+
+        if _checkpoint.get("model"):
+            checkpoint = _checkpoint["model"]
+        else:
+            checkpoint = _checkpoint
+        
         # remove xtts gpt trainer extra keys
         ignore_keys = ["torch_mel_spectrogram_style_encoder", "torch_mel_spectrogram_dvae", "dvae"]
         for key in list(checkpoint.keys()):

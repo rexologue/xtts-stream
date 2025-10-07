@@ -17,6 +17,8 @@ import torch
 from xtts import StreamingMetrics, Xtts
 from xtts_config import XttsArgs, XttsAudioConfig, XttsConfig
 
+from ruaccent import RUAccent
+
 
 def _filter_kwargs(cls, data: dict) -> dict:
     allowed = {field.name for field in fields(cls)}
@@ -57,6 +59,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stream-chunk-size", type=int, default=20, help="Number of GPT tokens per chunk")
     parser.add_argument("--stream-overlap", type=int, default=512, help="Sample overlap for crossfade")
     parser.add_argument("--stream-ctx-seconds", type=int, default=None, help="Optional left context in seconds")
+    parser.add_argument("--accent", action="store_true", help="Enable RUAccent for auto-accentizing text")
     parser.add_argument("--output", type=Path, required=True, help="Directory to store generated results")
     return parser.parse_args()
 
@@ -213,11 +216,22 @@ def main() -> None:
     sample_rate = config.model_args.output_sample_rate
     results: list[SampleResult] = []
 
+    if args.accent:
+        accentizer = RUAccent()
+        accentizer.load(omograph_model_size='turbo3.1', use_dictionary=True, tiny_mode=False)
+        print("RUAccent Enabled!")
+
     for identifier, text in entries:
         output_wav = wav_dir / f"{identifier}.wav"
         print(f"Generating {identifier}: {text}")
+
+        if args.accent:
+            t = accentizer.process_all(text)
+        else:
+            t = text
+
         stream = model.inference_stream(
-            text=text,
+            text=t,
             language=args.language,
             gpt_cond_latent=gpt_latent,
             speaker_embedding=speaker_embedding,
