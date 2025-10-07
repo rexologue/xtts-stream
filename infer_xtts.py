@@ -54,6 +54,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repetition_penalty", type=float, default=None)
     parser.add_argument("--speed", type=float, default=1.0)
     parser.add_argument("--split-text", action="store_true", help="Enable automatic sentence splitting")
+    parser.add_argument("--stream", action="store_true", help="Enable streaming synthesis")
+    parser.add_argument(
+        "--stream-chunk-size",
+        type=int,
+        default=20,
+        help="Number of GPT tokens to accumulate before emitting an audio chunk",
+    )
+    parser.add_argument(
+        "--stream-overlap",
+        type=int,
+        default=1024,
+        help="Number of samples to overlap when cross-fading streamed chunks",
+    )
     return parser.parse_args()
 
 
@@ -87,17 +100,69 @@ def main() -> None:
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
 
-    result = model.synthesize(
-        text=args.text,
-        speaker_wav=str(args.reference),
-        language=args.language,
-        enable_text_splitting=args.split_text,
-        speed=args.speed,
-    )
+    inference_kwargs = {
+        "temperature": config.temperature,
+        "top_p": config.top_p,
+        "top_k": config.top_k,
+        "length_penalty": config.length_penalty,
+        "repetition_penalty": config.repetition_penalty,
+        "speed": args.speed,
+        "enable_text_splitting": args.split_text,
+    }
 
-    wav = np.asarray(result["wav"], dtype=np.float32)
-    sf.write(args.output, wav, config.model_args.output_sample_rate)
-    print(f"Saved audio to {args.output}")
+    if args.stream:
+        voice_settings = {
+            "gpt_cond_len": config.gpt_cond_len,
+            "gpt_cond_chunk_len": config.gpt_cond_chunk_len,
+            "max_ref_length": config.max_ref_len,
+            "sound_norm_refs": config.sound_norm_refs,
+        }
+        voice = model.clone_voice(speaker_wav=str(args.reference), **voice_settings)
+        gpt_latent = voice["gpt_conditioning_latents"]
+        speaker_embedding = voice["speaker_embedding"]
+
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        sample_rate = config.model_args.output_sample_rate
+        total_samples = 0
+        with sf.SoundFile(
+            str(args.output),
+            mode="w",
+            samplerate=sample_rate,
+            channels=1,
+            subtype="FLOAT",
+        ) as stream_file:
+            for chunk in model.inference_stream(
+                text=args.text,
+                language=args.language,
+                gpt_cond_latent=gpt_latent,
+                speaker_embedding=speaker_embedding,
+                stream_chunk_size=args.stream_chunk_size,
+                overlap_wav_len=args.stream_overlap,
+                **inference_kwargs,
+            ):
+                if chunk is None:
+                    continue
+                chunk_np = chunk.detach().to(torch.float32).cpu().numpy()
+                if chunk_np.ndim == 0 or chunk_np.size == 0:
+                    continue
+                stream_file.write(chunk_np)
+                total_samples += int(chunk_np.size)
+                print(
+                    f"Streamed {chunk_np.size} samples (total {total_samples})",
+                    flush=True,
+                )
+        print(f"Saved streamed audio to {args.output}")
+    else:
+        result = model.synthesize(
+            text=args.text,
+            speaker_wav=str(args.reference),
+            language=args.language,
+            **inference_kwargs,
+        )
+
+        wav = np.asarray(result["wav"], dtype=np.float32)
+        sf.write(args.output, wav, config.model_args.output_sample_rate)
+        print(f"Saved audio to {args.output}")
 
 
 if __name__ == "__main__":
