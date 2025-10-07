@@ -26,7 +26,7 @@ class StreamingMetrics:
     time_to_first_token: float | None
     time_to_first_audio: float | None
     real_time_factor: float | None
-    latency: float
+    latency: float  # average chunk generation time
 from tokenizer import VoiceBpeTokenizer, split_sentence
 from xtts_manager import LanguageManager, SpeakerManager
 from base_tts import BaseTTS
@@ -679,6 +679,9 @@ class Xtts(BaseTTS):
         speaker_embedding = speaker_embedding.to(self.device)
 
         start_time = time.perf_counter()
+        last_chunk_time = start_time
+        chunk_generation_time_total = 0.0
+        chunk_count = 0
         time_to_first_token: float | None = None
         time_to_first_audio: float | None = None
         generated_audio_samples = 0
@@ -788,6 +791,12 @@ class Xtts(BaseTTS):
                         if processed_wav_chunk is not None and processed_wav_chunk.numel() > 0:
                             generated_audio_samples += processed_wav_chunk.numel()
 
+                        if processed_wav_chunk is not None and processed_wav_chunk.numel() > 0:
+                            now = time.perf_counter()
+                            chunk_generation_time_total += now - last_chunk_time
+                            last_chunk_time = now
+                            chunk_count += 1
+
                         last_tokens = []
                         yield processed_wav_chunk
                         continue
@@ -850,6 +859,11 @@ class Xtts(BaseTTS):
                     if processed_wav_chunk.numel() > 0:
                         generated_audio_samples += processed_wav_chunk.numel()
 
+                        now = time.perf_counter()
+                        chunk_generation_time_total += now - last_chunk_time
+                        last_chunk_time = now
+                        chunk_count += 1
+
                     # чистим историю, оставляя только левый контекст для следующего окна
                     if ctx_tok > 0:
                         all_latents = all_latents[-ctx_tok:]
@@ -865,11 +879,15 @@ class Xtts(BaseTTS):
             (total_time / generated_audio_seconds) if generated_audio_seconds > 0 else None
         )
 
+        average_chunk_generation_time = (
+            chunk_generation_time_total / chunk_count if chunk_count > 0 else 0.0
+        )
+
         metrics = StreamingMetrics(
             time_to_first_token=time_to_first_token,
             time_to_first_audio=time_to_first_audio,
             real_time_factor=real_time_factor,
-            latency=total_time,
+            latency=average_chunk_generation_time,
         )
 
         return metrics
