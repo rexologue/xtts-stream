@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,14 @@ from shared_configs import BaseTTSConfig
 from gpt import GPT
 from hifigan_decoder import HifiDecoder
 from stream_generator import init_stream_support
+
+
+@dataclass
+class StreamingMetrics:
+    time_to_first_token: float | None
+    time_to_first_audio: float | None
+    real_time_factor: float | None
+    latency: float
 from tokenizer import VoiceBpeTokenizer, split_sentence
 from xtts_manager import LanguageManager, SpeakerManager
 from base_tts import BaseTTS
@@ -669,6 +678,11 @@ class Xtts(BaseTTS):
         gpt_cond_latent = gpt_cond_latent.to(self.device)
         speaker_embedding = speaker_embedding.to(self.device)
 
+        start_time = time.perf_counter()
+        time_to_first_token: float | None = None
+        time_to_first_audio: float | None = None
+        generated_audio_samples = 0
+
         if enable_text_splitting:
             text = split_sentence(text, language, self.tokenizer.char_limits[language])
         else:
@@ -736,6 +750,8 @@ class Xtts(BaseTTS):
             while not is_end:
                 try:
                     x, latent = next(gpt_generator)
+                    if time_to_first_token is None:
+                        time_to_first_token = time.perf_counter() - start_time
                     last_tokens += [x]
                     all_latents += [latent]
                 except StopIteration:
@@ -762,6 +778,15 @@ class Xtts(BaseTTS):
                             processed_wav_chunk = torch.from_numpy(wav_chunk_numpy.copy()).to(self.device).float()
                         else:
                             processed_wav_chunk = wav_chunk
+
+                        if (
+                            processed_wav_chunk is not None
+                            and processed_wav_chunk.numel() > 0
+                            and time_to_first_audio is None
+                        ):
+                            time_to_first_audio = time.perf_counter() - start_time
+                        if processed_wav_chunk is not None and processed_wav_chunk.numel() > 0:
+                            generated_audio_samples += processed_wav_chunk.numel()
 
                         last_tokens = []
                         yield processed_wav_chunk
@@ -820,6 +845,11 @@ class Xtts(BaseTTS):
                     else:
                         processed_wav_chunk = out_chunk  # пусто — ничего не отдаём
 
+                    if processed_wav_chunk.numel() > 0 and time_to_first_audio is None:
+                        time_to_first_audio = time.perf_counter() - start_time
+                    if processed_wav_chunk.numel() > 0:
+                        generated_audio_samples += processed_wav_chunk.numel()
+
                     # чистим историю, оставляя только левый контекст для следующего окна
                     if ctx_tok > 0:
                         all_latents = all_latents[-ctx_tok:]
@@ -828,6 +858,21 @@ class Xtts(BaseTTS):
                     last_tokens = []
 
                     yield processed_wav_chunk
+
+        total_time = time.perf_counter() - start_time
+        generated_audio_seconds = generated_audio_samples / sr_out if sr_out else 0.0
+        real_time_factor = (
+            (total_time / generated_audio_seconds) if generated_audio_seconds > 0 else None
+        )
+
+        metrics = StreamingMetrics(
+            time_to_first_token=time_to_first_token,
+            time_to_first_audio=time_to_first_audio,
+            real_time_factor=real_time_factor,
+            latency=total_time,
+        )
+
+        return metrics
 
     def forward(self):
         raise NotImplementedError(
