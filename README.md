@@ -44,6 +44,21 @@ python infer_xtts.py \
 
 Set `--device cpu` if you do not have a GPU available.  Advanced sampling controls (temperature, top-k/p, length penalties, speed, etc.) can be overridden via CLI flags; see `python infer_xtts.py --help` for the full list.
 
+To stream audio chunks while they are generated, add `--stream` (optionally tuning `--stream-chunk-size` and `--stream-overlap`):
+
+```bash
+python infer_xtts.py \
+  --config /path/to/config.json \
+  --checkpoint /path/to/model.pth \
+  --tokenizer /path/to/vocab.json \
+  --speakers /path/to/speakers_xtts.pth \
+  --text "Your text goes here" \
+  --language en \
+  --reference /path/to/reference.wav \
+  --output ./generated.wav \
+  --stream
+```
+
 ## Repository Layout
 
 - `xtts.py`, `gpt.py`, `autoregressive.py`, `perceiver_encoder.py`, `xtransformers.py` – core autoregressive stack.
