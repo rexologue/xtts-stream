@@ -130,6 +130,17 @@ def main() -> None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         sample_rate = config.model_args.output_sample_rate
         total_samples = 0
+        stream = model.inference_stream(
+            text=args.text,
+            language=args.language,
+            gpt_cond_latent=gpt_latent,
+            speaker_embedding=speaker_embedding,
+            stream_chunk_size=args.stream_chunk_size,
+            overlap_wav_len=args.stream_overlap,
+            left_context_seconds=args.stream_ctx_seconds,
+            **inference_kwargs,
+        )
+        metrics = None
         with sf.SoundFile(
             str(args.output),
             mode="w",
@@ -137,16 +148,13 @@ def main() -> None:
             channels=1,
             subtype="FLOAT",
         ) as stream_file:
-            for chunk in model.inference_stream(
-                text=args.text,
-                language=args.language,
-                gpt_cond_latent=gpt_latent,
-                speaker_embedding=speaker_embedding,
-                stream_chunk_size=args.stream_chunk_size,
-                overlap_wav_len=args.stream_overlap,
-                left_context_seconds=args.stream_ctx_seconds,
-                **inference_kwargs,
-            ):
+            while True:
+                try:
+                    chunk = next(stream)
+                except StopIteration as stop:
+                    metrics = stop.value
+                    break
+
                 if chunk is None:
                     continue
                 chunk_np = chunk.detach().to(torch.float32).cpu().numpy()
@@ -159,6 +167,15 @@ def main() -> None:
                     flush=True,
                 )
         print(f"Saved streamed audio to {args.output}")
+        if metrics is not None:
+            print("Streaming metrics:")
+            if metrics.time_to_first_token is not None:
+                print(f"  Time to first token: {metrics.time_to_first_token:.3f}s")
+            if metrics.time_to_first_audio is not None:
+                print(f"  Time to first audio: {metrics.time_to_first_audio:.3f}s")
+            if metrics.real_time_factor is not None:
+                print(f"  Real-time factor: {metrics.real_time_factor:.3f}")
+            print(f"  Latency: {metrics.latency:.3f}s")
     else:
         result = model.synthesize(
             text=args.text,
