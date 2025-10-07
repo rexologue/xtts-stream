@@ -175,7 +175,7 @@ def main() -> None:
                 print(f"  Time to first audio: {metrics.time_to_first_audio:.3f}s")
             if metrics.real_time_factor is not None:
                 print(f"  Real-time factor: {metrics.real_time_factor:.3f}")
-            print(f"  Latency: {metrics.latency:.3f}s")
+            print(f"  Latency (avg chunk): {metrics.latency:.3f}s")
     else:
         result = model.synthesize(
             text=args.text,
