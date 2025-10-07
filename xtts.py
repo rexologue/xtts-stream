@@ -27,6 +27,7 @@ class StreamingMetrics:
     time_to_first_audio: float | None
     real_time_factor: float | None
     latency: float  # average chunk generation time
+    
 from tokenizer import VoiceBpeTokenizer, split_sentence
 from xtts_manager import LanguageManager, SpeakerManager
 from base_tts import BaseTTS

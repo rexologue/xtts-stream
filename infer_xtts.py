@@ -98,6 +98,7 @@ def main() -> None:
         checkpoint_path=str(args.checkpoint),
         vocab_path=str(args.tokenizer) if args.tokenizer else None,
         speaker_file_path=str(args.speakers) if args.speakers else None,
+        use_deepspeed=True
     )
     model.to(args.device)
     model.eval()
