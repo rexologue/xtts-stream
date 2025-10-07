@@ -64,8 +64,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--stream-overlap",
         type=int,
-        default=1024,
+        default=512,
         help="Number of samples to overlap when cross-fading streamed chunks",
+    )
+    parser.add_argument(
+        "--stream-ctx-seconds",
+        type=int,
+        default=2,
+        help="How much seconds of context will be used for vocoder",
     )
     return parser.parse_args()
 
@@ -138,6 +144,7 @@ def main() -> None:
                 speaker_embedding=speaker_embedding,
                 stream_chunk_size=args.stream_chunk_size,
                 overlap_wav_len=args.stream_overlap,
+                left_context_seconds=args.stream_ctx_seconds,
                 **inference_kwargs,
             ):
                 if chunk is None:

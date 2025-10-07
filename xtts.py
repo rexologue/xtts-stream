@@ -259,11 +259,14 @@ class Xtts(BaseTTS):
 
     def _apply_noise_reduction(self, wav_chunk_numpy):
         """Применяет простое шумоподавление."""
-        # Убедитесь, что sample_rate определен в вашем классе
-        sample_rate = 24_000 # например, 24000
-        
         # reduce_noise уменьшает шум в аудио
-        reduced_noise_chunk = nr.reduce_noise(y=wav_chunk_numpy, sr=sample_rate, stationary=True, prop_decrease=0.75)
+        reduced_noise_chunk = nr.reduce_noise(
+            y=wav_chunk_numpy, 
+            sr=self.args.output_sample_rate, 
+            stationary=True, 
+            prop_decrease=0.75
+        )
+        
         return reduced_noise_chunk
     
     @torch.inference_mode()
@@ -612,31 +615,29 @@ class Xtts(BaseTTS):
             "gpt_latents": torch.cat(gpt_latents_list, dim=1).numpy(),
             "speaker_embedding": speaker_embedding,
         }
-
-    def handle_chunks(self, wav_gen, wav_gen_prev, wav_overlap, overlap_len):
-        """Handle chunk formatting in streaming mode"""
+    
+    def handle_chunks(self, wav_gen, wav_gen_prev, wav_overlap, fade_in, fade_out):
+        """Handle chunk formatting in streaming mode (cumulative mode)"""
+        overlap_len = fade_in.numel()
         wav_chunk = wav_gen[:-overlap_len]
         if wav_gen_prev is not None:
             wav_chunk = wav_gen[(wav_gen_prev.shape[0] - overlap_len) : -overlap_len]
+
         if wav_overlap is not None:
-            # cross fade the overlap section
-            if overlap_len > len(wav_chunk):
-                # wav_chunk is smaller than overlap_len, pass on last wav_gen
+            if overlap_len > wav_chunk.numel():
                 if wav_gen_prev is not None:
-                    wav_chunk = wav_gen[(wav_gen_prev.shape[0] - overlap_len) :]
+                    wav_chunk = wav_gen[(wav_gen_prev.shape[0] - overlap_len):]
                 else:
-                    # not expecting will hit here as problem happens on last chunk
                     wav_chunk = wav_gen[-overlap_len:]
                 return wav_chunk, wav_gen, None
-            else:
-                crossfade_wav = wav_chunk[:overlap_len]
-                crossfade_wav = crossfade_wav * torch.linspace(0.0, 1.0, overlap_len).to(crossfade_wav.device)
-                wav_chunk[:overlap_len] = wav_overlap * torch.linspace(1.0, 0.0, overlap_len).to(wav_overlap.device)
-                wav_chunk[:overlap_len] += crossfade_wav
+
+            # было: wav_chunk[:overlap_len].mul_(fade_out).add_(crossfade_wav)  ← это неправильно
+            head = wav_chunk[:overlap_len]
+            head.mul_(fade_in).add_(wav_overlap * fade_out)   # старый*fade_out + новый*fade_in
 
         wav_overlap = wav_gen[-overlap_len:]
-        wav_gen_prev = wav_gen
-        return wav_chunk, wav_gen_prev, wav_overlap
+        return wav_chunk, wav_gen, wav_overlap
+
 
     @torch.inference_mode()
     def inference_stream(
@@ -645,9 +646,13 @@ class Xtts(BaseTTS):
         language,
         gpt_cond_latent,
         speaker_embedding,
+        apply_denoise: bool = True,
         # Streaming
         stream_chunk_size=20,
         overlap_wav_len=1024,
+        # Новый опциональный режим усечения истории:
+        left_context_tokens: int | None = None,
+        left_context_seconds: float | None = None,
         # GPT inference
         temperature=0.75,
         length_penalty=1.0,
@@ -663,10 +668,24 @@ class Xtts(BaseTTS):
         length_scale = 1.0 / max(speed, 0.05)
         gpt_cond_latent = gpt_cond_latent.to(self.device)
         speaker_embedding = speaker_embedding.to(self.device)
+
         if enable_text_splitting:
             text = split_sentence(text, language, self.tokenizer.char_limits[language])
         else:
             text = [text]
+
+        # параметры для пересчёта «токены -> сэмплы» в аудио (учитываем speed через length_scale)
+        sr_in = 22050
+        sr_out = getattr(self.args, "output_sample_rate", 24000)
+        tokens_per_second = sr_in / float(self.args.gpt_code_stride_len)        # ≈ 21.53 токенов/с
+        samples_per_token_out = sr_out * (self.args.gpt_code_stride_len / sr_in) * length_scale  # ≈ 1114 * length_scale сэмплов/токен
+
+        # если секунды заданы, переводим в токены
+        if left_context_seconds is not None and (left_context_tokens is None or left_context_tokens <= 0):
+            left_context_tokens = max(0, int(round(left_context_seconds * tokens_per_second)))
+
+        # флаг режима «обрезаем до контекста»
+        trim_to_context = bool(left_context_tokens and left_context_tokens > 0)
 
         for sent in text:
             sent = sent.strip().lower()
@@ -702,6 +721,18 @@ class Xtts(BaseTTS):
             wav_overlap = None
             is_end = False
 
+            if not trim_to_context:
+                # НЕ меняем поведение: окна по исходному overlap_wav_len
+                win = torch.hann_window(2 * overlap_wav_len, periodic=False, device=self.device, dtype=torch.float32)
+                fade_in, fade_out = win[:overlap_wav_len], win[overlap_wav_len:]
+                overlap_len = overlap_wav_len
+            else:
+                # В режиме обрезки выравниваем overlap по hop
+                hop = getattr(self.args, "output_hop_length", 256)
+                overlap_len = max(hop, (overlap_wav_len // hop) * hop)
+                win = torch.hann_window(2 * overlap_len, periodic=False, device=self.device, dtype=torch.float32)
+                fade_in, fade_out = win[:overlap_len], win[overlap_len:]
+
             while not is_end:
                 try:
                     x, latent = next(gpt_generator)
@@ -711,36 +742,92 @@ class Xtts(BaseTTS):
                     is_end = True
 
                 if is_end or (stream_chunk_size > 0 and len(last_tokens) >= stream_chunk_size):
-                    gpt_latents = torch.cat(all_latents, dim=0)[None, :]
+                    if not trim_to_context:
+                        # ---- Прежний кумулятивный путь: декодим всю историю ----
+                        gpt_latents = torch.cat(all_latents, dim=0)[None, :]
+                        if length_scale != 1.0:
+                            gpt_latents = F.interpolate(
+                                gpt_latents.transpose(1, 2), scale_factor=length_scale, mode="linear"
+                            ).transpose(1, 2)
+
+                        wav_gen = self.hifigan_decoder(gpt_latents, g=speaker_embedding)  # [1, S]
+                        wav_chunk, wav_gen_prev, wav_overlap = self.handle_chunks(
+                            wav_gen.squeeze(), wav_gen_prev, wav_overlap, fade_in, fade_out
+                        )
+
+                        if wav_chunk is not None and wav_chunk.numel() > 0 and apply_denoise:
+                            wav_chunk_numpy = wav_chunk.cpu().numpy()
+                            # оставляем поведение как было (шумодав только для отдаваемого чанка)
+                            wav_chunk_numpy = self._apply_noise_reduction(wav_chunk_numpy)
+                            processed_wav_chunk = torch.from_numpy(wav_chunk_numpy.copy()).to(self.device).float()
+                        else:
+                            processed_wav_chunk = wav_chunk
+
+                        last_tokens = []
+                        yield processed_wav_chunk
+                        continue
+
+                    # ---- Новый путь: усечение истории до небольшого контекста ----
+                    L = len(all_latents)
+                    new_cnt = len(last_tokens)
+                    ctx_tok = min(int(left_context_tokens), max(0, L - new_cnt))
+
+                    # собираем только (контекст + новый хвост) для декодера
+                    decode_start = L - (ctx_tok + new_cnt)
+                    gpt_latents = torch.cat(all_latents[decode_start:], dim=0)[None, :]  # [1, ctx+new, 1024]
+
                     if length_scale != 1.0:
                         gpt_latents = F.interpolate(
                             gpt_latents.transpose(1, 2), scale_factor=length_scale, mode="linear"
                         ).transpose(1, 2)
-                    wav_gen = self.hifigan_decoder(gpt_latents, g=speaker_embedding.to(self.device))
-                    wav_chunk, wav_gen_prev, wav_overlap = self.handle_chunks(
-                        wav_gen.squeeze(), wav_gen_prev, wav_overlap, overlap_wav_len
-                    )
 
-                    if wav_chunk is not None and wav_chunk.numel() > 0:
-                        # 1. Конвертируем тензор в NumPy массив для обработки
-                        wav_chunk_numpy = wav_chunk.cpu().numpy()
-                        
-                        # 2. Применяем фильтр высоких частот
-                        # wav_chunk_numpy = self._apply_high_pass_filter(wav_chunk_numpy, cutoff=80)
-                        
-                        # 3. (Опционально) Применяем шумоподавление. 
-                        # Это может добавить небольшую задержку.
-                        wav_chunk_numpy = self._apply_noise_reduction(wav_chunk_numpy)
+                    wav_partial = self.hifigan_decoder(gpt_latents, g=speaker_embedding).squeeze().contiguous()  # [S_part]
 
-                        # 4. Конвертируем обратно в тензор
-                        processed_wav_chunk = torch.from_numpy(wav_chunk_numpy.copy()).to(self.device).float()
+                    # отбрасываем аудио-часть, соответствующую контекстным токенам (выровнено по hop)
+                    hop = getattr(self.args, "output_hop_length", 256)
+                    ctx_samples = int(round(ctx_tok * samples_per_token_out))
+                    ctx_samples = (ctx_samples // hop) * hop
+
+                    if ctx_samples >= wav_partial.shape[-1]:
+                        # защита от вырожденного случая: контекст длиннее
+                        new_wav = wav_partial
                     else:
-                        processed_wav_chunk = wav_chunk
+                        new_wav = wav_partial[ctx_samples:]  # только «новая» часть
 
+                    # единообразная обработка шума ДЛЯ ВСЕГО куска до разбиения (чтобы overlap и out совпадали по домену)
+                    if new_wav.numel() > 0 and apply_denoise:
+                        _cpu = new_wav.detach().cpu().numpy()
+                        # _cpu = self._apply_high_pass_filter(_cpu, cutoff=80)
+                        _cpu = self._apply_noise_reduction(_cpu)
+                        new_wav = torch.from_numpy(_cpu.copy()).to(self.device).float()
 
+                    # кросс-фейдим с прошлым overlap и готовим overlap на следующий шаг
+                    if wav_overlap is not None and new_wav.numel() >= overlap_len:
+                        head = new_wav[:overlap_len]
+                        head.mul_(fade_in).add_(wav_overlap * fade_out)
+                        new_wav[:overlap_len] = head
+
+                    # делим на отдаваемую часть и новый overlap
+                    if new_wav.numel() > overlap_len:
+                        out_chunk = new_wav[:-overlap_len]
+                        wav_overlap = new_wav[-overlap_len:]
+                    else:
+                        out_chunk = torch.empty(0, device=new_wav.device, dtype=new_wav.dtype)
+                        wav_overlap = new_wav.clone()
+
+                    if out_chunk.numel() > 0:
+                        processed_wav_chunk = out_chunk
+                    else:
+                        processed_wav_chunk = out_chunk  # пусто — ничего не отдаём
+
+                    # чистим историю, оставляя только левый контекст для следующего окна
+                    if ctx_tok > 0:
+                        all_latents = all_latents[-ctx_tok:]
+                    else:
+                        all_latents = []
                     last_tokens = []
-                    # Отдаём обработанный чанк
-                    yield processed_wav_chunk     
+
+                    yield processed_wav_chunk
 
     def forward(self):
         raise NotImplementedError(
