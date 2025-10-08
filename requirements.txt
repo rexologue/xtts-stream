@@ -20,3 +20,4 @@ torchaudio
 transformers
 uvicorn
 websockets
+deepspeed

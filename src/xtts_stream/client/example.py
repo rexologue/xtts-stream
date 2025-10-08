@@ -1,10 +1,10 @@
 # client_min.py
-import os, json, base64, asyncio, websockets, sys
+import os, json, base64, asyncio, websockets, sys, inspect
 from urllib.parse import urlencode
 
 BASE_URI = os.environ.get(
     "WS_URI_BASE",
-    "ws://127.0.0.1:8000/v1/text-to-speech/VOICE123/stream-input",
+    "ws://0.0.0.0:60215/v1/text-to-speech/VOICE123/stream-input",
 )
 
 query_params = {
@@ -23,7 +23,11 @@ if left_ctx is not None:
 URI = os.environ.get("WS_URI", f"{BASE_URI}?{urlencode(query_params)}")
 
 async def main():
-    async with websockets.connect(URI, extra_headers={"xi-api-key": "dummy"}) as ws:
+    headers = {"xi-api-key": "dummy"}
+    connect_params = inspect.signature(websockets.connect.__init__).parameters
+    header_kwarg = "additional_headers" if "additional_headers" in connect_params else "extra_headers"
+    
+    async with websockets.connect(URI, **{header_kwarg: headers}) as ws:
         # init: пробел + расписание триггера (как у 11labs)
         await ws.send(json.dumps({
             "text": " ",
