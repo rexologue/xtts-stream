@@ -1,37 +1,19 @@
-import torch
+"""Compatibility shim for the legacy `xtts_manager` module."""
 
-from generic_utils import is_pytorch_at_least_2_4
+from pathlib import Path
+import runpy
+import sys
 
+_ROOT = Path(__file__).resolve().parent
+_SRC = _ROOT / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
 
-class SpeakerManager:
-    def __init__(self, speaker_file_path=None):
-        self.speakers = torch.load(speaker_file_path, weights_only=is_pytorch_at_least_2_4())
-
-    @property
-    def name_to_id(self):
-        return self.speakers
-
-    @property
-    def num_speakers(self):
-        return len(self.name_to_id)
-
-    @property
-    def speaker_names(self):
-        return list(self.name_to_id.keys())
-
-
-class LanguageManager:
-    def __init__(self, config):
-        self.langs = config["languages"]
-
-    @property
-    def name_to_id(self):
-        return self.langs
-
-    @property
-    def num_languages(self):
-        return len(self.name_to_id)
-
-    @property
-    def language_names(self):
-        return list(self.name_to_id)
+if __name__ == "__main__":
+    runpy.run_module("xtts_stream.core.xtts_manager", run_name="__main__")
+else:
+    _module = __import__("xtts_stream.core.xtts_manager", fromlist=["*"])
+    globals().update({k: getattr(_module, k) for k in dir(_module) if not k.startswith("__")})
+    if hasattr(_module, "__all__"):
+        __all__ = _module.__all__  # type: ignore
+    sys.modules.setdefault(__name__, _module)

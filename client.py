@@ -1,33 +1,16 @@
-# client_min.py
-import os, json, base64, asyncio, websockets, sys
+"""Re-export the example websocket client for convenience."""
 
-URI = os.environ.get(
-    "WS_URI",
-    "ws://127.0.0.1:8000/v1/text-to-speech/VOICE123/stream-input?model_id=eleven_flash_v2_5&output_format=pcm_24000"
-)
+from pathlib import Path
+import sys
 
-async def main():
-    async with websockets.connect(URI, extra_headers={"xi-api-key": "dummy"}) as ws:
-        # init: пробел + расписание триггера (как у 11labs)
-        await ws.send(json.dumps({
-            "text": " ",
-            "generation_config": {"chunk_length_schedule": [80, 120, 160, 200]}
-        }))
+ROOT = Path(__file__).resolve().parent
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
-        # шлём фразу кусками
-        await ws.send(json.dumps({"text": "Привет! Это тест потокового TTS. "}))
-        await ws.send(json.dumps({"flush": True}))
-        await ws.send(json.dumps({"text": "Продолжаем говорить без задержек. "}))
-        await ws.send(json.dumps({"text": ""}))  # завершить текущую реплику
-
-        # читаем поток и пишем сырой PCM в stdout (можно слушать через ffplay)
-        while True:
-            msg = json.loads(await ws.recv())
-            if msg.get("isFinal"):
-                break
-            audio = base64.b64decode(msg["audio"])
-            sys.stdout.buffer.write(audio)
-            sys.stdout.flush()
+from xtts_stream.client.example import main
 
 if __name__ == "__main__":
+    import asyncio
+
     asyncio.run(main())

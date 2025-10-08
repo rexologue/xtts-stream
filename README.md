@@ -59,14 +59,25 @@ python infer_xtts.py \
   --stream
 ```
 
+### Adding another streaming backend
+
+The websocket service is built around small wrapper classes located in
+`src/xtts_stream/wrappers`. Implement :class:`xtts_stream.wrappers.base.StreamingTTSWrapper`
+for your model, expose a convenience constructor (for instance `from_environment`) and import it
+inside `src/xtts_stream/service/app.py`. The ElevenLabs-compatible contract (input payloads and PCM
+frame encoding) is handled by the service layer, so wrappers only need to focus on invoking the
+underlying model and returning float32 audio frames.
+
 ## Repository Layout
 
-- `xtts.py`, `gpt.py`, `autoregressive.py`, `perceiver_encoder.py`, `xtransformers.py` – core autoregressive stack.
-- `hifigan_decoder.py`, `hifigan_generator.py`, `resnet.py` – neural vocoder and speaker encoder.
-- `tokenizer.py`, `text/`, `zh_num2words.py` – multilingual tokenisation utilities.
-- `generic_utils.py`, `shared_configs.py`, `xtts_config.py`, `xtts_manager.py` – configuration helpers.
-- `stream_generator.py`, `helpers.py`, `arch_utils.py`, `transformer.py` – shared utilities for generation.
-- `infer_xtts.py` – command-line wrapper for end-to-end inference.
+- `src/xtts_stream/core/` – the XTTS inference stack (autoregressive GPT, vocoder, tokenisers, helpers, etc.). Legacy module
+  names (`xtts`, `gpt`, `generic_utils`, …) are still importable for backwards compatibility.
+- `src/xtts_stream/service/` – FastAPI application exposing the ElevenLabs compatible websocket endpoint.
+- `src/xtts_stream/wrappers/` – reusable abstractions for streaming TTS engines. The XTTS implementation lives here and serves as
+  a template for future backends.
+- `src/xtts_stream/client/` – reference websocket client mirroring the ElevenLabs streaming format.
+- `src/xtts_stream/resources/` – ancillary resources (text normalisation data, etc.).
+- `service.py` / `client.py` – convenience shims that keep historical entry points working.
 
 ## Notes
 

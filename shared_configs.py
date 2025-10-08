@@ -1,22 +1,19 @@
-from dataclasses import dataclass
-from typing import Any
+"""Compatibility shim for the legacy `shared_configs` module."""
 
-from coqpit import Coqpit
+from pathlib import Path
+import runpy
+import sys
 
+_ROOT = Path(__file__).resolve().parent
+_SRC = _ROOT / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
 
-@dataclass
-class BaseTTSConfig(Coqpit):
-    """Light-weight configuration container shared by inference components."""
-
-    model: str = "tts"
-    description: str | None = None
-    model_args: Any = None
-
-    def __getitem__(self, item: str) -> Any:
-        return getattr(self, item)
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        setattr(self, key, value)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {k: getattr(self, k) for k in self.__dataclass_fields__}
+if __name__ == "__main__":
+    runpy.run_module("xtts_stream.core.shared_configs", run_name="__main__")
+else:
+    _module = __import__("xtts_stream.core.shared_configs", fromlist=["*"])
+    globals().update({k: getattr(_module, k) for k in dir(_module) if not k.startswith("__")})
+    if hasattr(_module, "__all__"):
+        __all__ = _module.__all__  # type: ignore
+    sys.modules.setdefault(__name__, _module)
