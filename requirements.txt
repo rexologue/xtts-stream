@@ -4,6 +4,7 @@ fsspec
 librosa
 noisereduce
 numpy
+einops
 pyyaml
 num2words
 packaging
