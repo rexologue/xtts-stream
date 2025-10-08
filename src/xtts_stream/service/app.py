@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import os
 import time
 from dataclasses import dataclass
@@ -34,6 +35,8 @@ except SettingsError as exc:
     raise RuntimeError(str(exc)) from exc
 
 MAX_CONCURRENCY = settings.service.max_concurrency
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 app.add_middleware(
@@ -213,6 +216,7 @@ async def ws_stream_input(ws: WebSocket, voice_id: str):  # noqa: D401
 def _startup() -> None:
     global tts_wrapper
     tts_wrapper = XttsStreamingWrapper.from_settings(settings.model)
+    logger.info("XTTS model initialised and ready for generation.")
 
 
 @app.on_event("shutdown")

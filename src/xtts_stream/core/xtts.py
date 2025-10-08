@@ -188,6 +188,12 @@ class XttsArgs(Coqpit):
     # constants
     duration_const: int = 102400
 
+    # checkpoints and normalization assets
+    mel_norm_file: str = "mel_stats.pth"
+    dvae_checkpoint: str = "dvae.pth"
+    xtts_checkpoint: str = "model.pth"
+    vocoder: str = ""
+
 
 class Xtts(BaseTTS):
     """XTTS model implementation.
@@ -301,6 +307,7 @@ class Xtts(BaseTTS):
 
                 mel_chunk = wav_to_mel_cloning(
                     audio_chunk,
+                    self._mel_norms_file(),
                     mel_norms=self.mel_stats.cpu(),
                     n_fft=2048,
                     hop_length=256,
@@ -326,6 +333,7 @@ class Xtts(BaseTTS):
         else:
             mel = wav_to_mel_cloning(
                 audio,
+                self._mel_norms_file(),
                 mel_norms=self.mel_stats.cpu(),
                 n_fft=4096,
                 hop_length=1024,
@@ -1094,6 +1102,62 @@ class Xtts(BaseTTS):
             self.hifigan_decoder.eval()
             self.gpt.init_gpt_for_inference(kv_cache=self.args.kv_cache, use_deepspeed=use_deepspeed) # type: ignore
             self.gpt.eval() # type: ignore
+
+        self._load_mel_stats(checkpoint_dir=checkpoint_dir)
+
+    def _mel_norms_file(self) -> str:
+        if not self.mel_stats_path:
+            msg = "Mel-spectrogram normalization file not loaded. Ensure `mel_stats.pth` is present in the model directory."
+            raise RuntimeError(msg)
+        return self.mel_stats_path
+
+    def _load_mel_stats(self, *, checkpoint_dir: str | None) -> None:
+        mel_norm_file = getattr(self.args, "mel_norm_file", None)
+        if not mel_norm_file:
+            logger.warning("`mel_norm_file` was not provided in the model configuration.")
+            return
+
+        candidate_paths: list[str] = []
+        if os.path.isabs(mel_norm_file):
+            candidate_paths.append(mel_norm_file)
+        else:
+            if checkpoint_dir:
+                candidate_paths.append(os.path.join(os.fspath(checkpoint_dir), mel_norm_file))
+            if self.config.model_dir:
+                candidate_paths.append(os.path.join(os.fspath(self.config.model_dir), mel_norm_file))
+            candidate_paths.append(mel_norm_file)
+
+        for candidate in candidate_paths:
+            if os.path.exists(candidate):
+                self.mel_stats_path = os.fspath(candidate)
+                break
+
+        if not self.mel_stats_path:
+            logger.warning(
+                "Mel-spectrogram normalization file `%s` could not be found. Checked: %s",
+                mel_norm_file,
+                ", ".join(candidate_paths) if candidate_paths else "<none>",
+            )
+            return
+
+        stats = torch.load(
+            self.mel_stats_path,
+            map_location=torch.device("cpu"),
+            weights_only=is_pytorch_at_least_2_4(),
+        )
+        if isinstance(stats, dict):
+            for key in ("mel", "mel_stats", "stats", "mean", "std"):
+                if key in stats:
+                    stats = stats[key]
+                    break
+            else:
+                stats = next(iter(stats.values()))
+
+        if not isinstance(stats, torch.Tensor):
+            stats = torch.as_tensor(stats, dtype=self.mel_stats.dtype)
+        else:
+            stats = stats.to(dtype=self.mel_stats.dtype)
+        self.mel_stats.copy_(stats.to(self.mel_stats.device))
 
     def train_step(self):
         raise NotImplementedError(
