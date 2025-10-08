@@ -4,6 +4,7 @@ fsspec
 librosa
 noisereduce
 numpy
+pyyaml
 num2words
 packaging
 scipy
