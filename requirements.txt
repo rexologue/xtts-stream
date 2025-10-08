@@ -1,4 +1,5 @@
 coqpit>=0.0.17
+fastapi
 fsspec
 librosa
 noisereduce
@@ -13,3 +14,5 @@ tokenizers
 torch
 torchaudio
 transformers
+uvicorn
+websockets
