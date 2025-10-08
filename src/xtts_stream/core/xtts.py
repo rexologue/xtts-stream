@@ -44,7 +44,7 @@ init_stream_support()
 
 def wav_to_mel_cloning(
     wav,
-    mel_norms_file="../experiments/clips_mel_norms.pth",
+    mel_norms_file: str,
     mel_norms=None,
     device=torch.device("cpu"),
     n_fft=4096,
@@ -136,9 +136,6 @@ class XttsArgs(Coqpit):
         gpt_batch_size (int): The size of the auto-regressive batch.
         enable_redaction (bool, optional): Whether to enable redaction. Defaults to True.
         kv_cache (bool, optional): Whether to use the kv_cache. Defaults to True.
-        gpt_checkpoint (str, optional): The checkpoint for the autoregressive model. Defaults to None.
-        clvp_checkpoint (str, optional): The checkpoint for the ConditionalLatentVariablePerseq model. Defaults to None.
-        decoder_checkpoint (str, optional): The checkpoint for the DiffTTS model. Defaults to None.
         num_chars (int, optional): The maximum number of characters to generate. Defaults to 255.
 
         For GPT model:
@@ -160,9 +157,6 @@ class XttsArgs(Coqpit):
     gpt_batch_size: int = 1
     enable_redaction: bool = False
     kv_cache: bool = True
-    gpt_checkpoint: str = None
-    clvp_checkpoint: str = None
-    decoder_checkpoint: str = None
     num_chars: int = 255
 
     # XTTS GPT Encoder params
@@ -173,9 +167,9 @@ class XttsArgs(Coqpit):
     gpt_layers: int = 30
     gpt_n_model_channels: int = 1024
     gpt_n_heads: int = 16
-    gpt_number_text_tokens: int = None
-    gpt_start_text_token: int = None
-    gpt_stop_text_token: int = None
+    gpt_number_text_tokens: int = None # type: ignore
+    gpt_start_text_token: int = None # type: ignore
+    gpt_stop_text_token: int = None # type: ignore
     gpt_num_audio_tokens: int = 8194
     gpt_start_audio_token: int = 8192
     gpt_stop_audio_token: int = 8193
@@ -212,8 +206,6 @@ class Xtts(BaseTTS):
         super().__init__(config)
         self.mel_stats_path = None
         self.config = config
-        self.gpt_checkpoint = self.args.gpt_checkpoint
-        self.decoder_checkpoint = self.args.decoder_checkpoint  # TODO: check if this is even needed
         self.models_dir = config.model_dir
         self.gpt_batch_size = self.args.gpt_batch_size
 
@@ -225,9 +217,9 @@ class Xtts(BaseTTS):
     def init_models(self):
         """Initialize the models. We do it here since we need to load the tokenizer first."""
         if self.tokenizer.tokenizer is not None:
-            self.args.gpt_number_text_tokens = self.tokenizer.get_number_tokens()
-            self.args.gpt_start_text_token = self.tokenizer.tokenizer.token_to_id("[START]")
-            self.args.gpt_stop_text_token = self.tokenizer.tokenizer.token_to_id("[STOP]")
+            self.args.gpt_number_text_tokens = self.tokenizer.get_number_tokens() # type: ignore
+            self.args.gpt_start_text_token = self.tokenizer.tokenizer.token_to_id("[START]") # type: ignore
+            self.args.gpt_stop_text_token = self.tokenizer.tokenizer.token_to_id("[STOP]") # type: ignore
 
         if self.args.gpt_number_text_tokens:
             self.gpt = GPT(
@@ -261,7 +253,7 @@ class Xtts(BaseTTS):
         sample_rate = 24_000
         nyquist = 0.5 * sample_rate
         normal_cutoff = cutoff / nyquist
-        b, a = butter(order, normal_cutoff, btype='high', analog=False)
+        b, a = butter(order, normal_cutoff, btype='high', analog=False) # type: ignore
         
         # lfilter применяет фильтр. Возвращает отфильтрованный массив.
         filtered_chunk = lfilter(b, a, wav_chunk_numpy)
@@ -319,15 +311,18 @@ class Xtts(BaseTTS):
                     f_min=0,
                     f_max=8000,
                     n_mels=80,
-                )
-                style_emb = self.gpt.get_style_emb(mel_chunk.to(self.device), None)
+                ) # type: ignore
+
+                style_emb = self.gpt.get_style_emb(mel_chunk.to(self.device), None) # type: ignore
                 style_embs.append(style_emb)
 
             # mean style embedding
             if len(style_embs) == 0:
                 msg = f"Provided reference audio too short (minimum length: {MIN_AUDIO_SECONDS:.2f} seconds)."
                 raise RuntimeError(msg)
+            
             cond_latent = torch.stack(style_embs).mean(dim=0)
+
         else:
             mel = wav_to_mel_cloning(
                 audio,
@@ -341,8 +336,10 @@ class Xtts(BaseTTS):
                 f_min=0,
                 f_max=8000,
                 n_mels=80,
-            )
-            cond_latent = self.gpt.get_style_emb(mel.to(self.device))
+            ) # type: ignore
+
+            cond_latent = self.gpt.get_style_emb(mel.to(self.device)) # type: ignore
+
         return cond_latent.transpose(1, 2)
 
     @torch.inference_mode()
@@ -362,8 +359,10 @@ class Xtts(BaseTTS):
         **generate_kwargs: Any,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         cache_path: Path | None = None
+
         if speaker and voice_dir:
             cache_path = Path(voice_dir) / f"{speaker}.pt"
+
             if cache_path.is_file():
                 payload = torch.load(cache_path, map_location=self.device)
                 voice = payload.get("voice", payload)
@@ -371,15 +370,19 @@ class Xtts(BaseTTS):
                     key: value.to(self.device) if torch.is_tensor(value) else value
                     for key, value in voice.items()
                 }
+
                 metadata = payload.get("metadata", {"name": self.config["model"]})
+
                 if self.speaker_manager is not None:
                     self.speaker_manager.speakers[speaker] = voice
+
                 return voice, metadata
 
         gpt_conditioning_latents, speaker_embedding = self.get_conditioning_latents(
             audio_path=speaker_wav,
             **generate_kwargs,
         )
+
         voice = {"gpt_conditioning_latents": gpt_conditioning_latents, "speaker_embedding": speaker_embedding}
         metadata = {"name": self.config["model"]}
 
@@ -392,6 +395,7 @@ class Xtts(BaseTTS):
                 key: value.detach().cpu() if torch.is_tensor(value) else value
                 for key, value in voice.items()
             }
+
             torch.save({"voice": serializable_voice, "metadata": metadata}, cache_path)
 
         return voice, metadata
@@ -427,13 +431,15 @@ class Xtts(BaseTTS):
         speaker_embeddings = []
         audios = []
         speaker_embedding = None
+
         for file_path in audio_paths:
             audio = load_audio(file_path, load_sr)
             audio = audio[:, : load_sr * max_ref_length].to(self.device)
+
             if sound_norm_refs:
                 audio = (audio / torch.abs(audio).max()) * 0.75
             if librosa_trim_db is not None:
-                audio = librosa.effects.trim(audio, top_db=librosa_trim_db)[0]
+                audio = librosa.effects.trim(audio, top_db=librosa_trim_db)[0] # type: ignore
 
             # compute latents for the decoder
             speaker_embedding = self.get_speaker_embedding(audio, load_sr)
@@ -491,12 +497,14 @@ class Xtts(BaseTTS):
         assert "zh-cn" if language == "zh" else language in self.config.languages, (
             f" ❗ Language {language} is not supported. Supported languages are {self.config.languages}"
         )
+
         # Use generally found best tuning knobs for generation.
         voice_settings = {
             key: kwargs.pop(key, self.config[key])
             for key in ["gpt_cond_len", "gpt_cond_chunk_len", "max_ref_len", "sound_norm_refs"]
         }
         voice_settings["max_ref_length"] = voice_settings.pop("max_ref_len")
+
         inference_settings = {
             "temperature": self.config.temperature,
             "length_penalty": self.config.length_penalty,
@@ -505,12 +513,15 @@ class Xtts(BaseTTS):
             "top_p": self.config.top_p,
         }
         inference_settings.update(kwargs)  # allow overriding of preset settings with kwargs
-        if speaker is not None and speaker in self.speaker_manager.speakers:
-            gpt_cond_latent, speaker_embedding = self.speaker_manager.speakers[speaker].values()
+
+        if speaker is not None and speaker in self.speaker_manager.speakers: # type: ignore
+            gpt_cond_latent, speaker_embedding = self.speaker_manager.speakers[speaker].values() # type: ignore
+
         else:
             voice = self.clone_voice(speaker_wav, speaker, voice_dir, **voice_settings)
             gpt_cond_latent = voice["gpt_conditioning_latents"]
             speaker_embedding = voice["speaker_embedding"]
+
         return self.inference(text, language, gpt_cond_latent, speaker_embedding, **inference_settings)
 
     @torch.inference_mode()
@@ -586,7 +597,7 @@ class Xtts(BaseTTS):
             )
 
             with torch.no_grad():
-                gpt_codes = self.gpt.generate(
+                gpt_codes = self.gpt.generate( # type: ignore
                     cond_latents=gpt_cond_latent,
                     text_inputs=text_tokens,
                     do_sample=do_sample,
@@ -599,10 +610,11 @@ class Xtts(BaseTTS):
                     repetition_penalty=repetition_penalty,
                     output_attentions=False,
                     **hf_generate_kwargs,
-                )
+                ) 
+
                 expected_output_len = torch.tensor(
-                    [gpt_codes.shape[-1] * self.gpt.code_stride_len], device=text_tokens.device
-                )
+                    [gpt_codes.shape[-1] * self.gpt.code_stride_len], device=text_tokens.device # type: ignore
+                ) 
 
                 text_len = torch.tensor([text_tokens.shape[-1]], device=self.device)
                 gpt_latents = self.gpt(
@@ -613,7 +625,7 @@ class Xtts(BaseTTS):
                     cond_latents=gpt_cond_latent,
                     return_attentions=False,
                     return_latent=True,
-                )
+                ) # type: ignore
 
                 if length_scale != 1.0:
                     gpt_latents = F.interpolate(
@@ -716,11 +728,11 @@ class Xtts(BaseTTS):
                 " ❗ XTTS can only generate text with a maximum of 400 tokens."
             )
 
-            fake_inputs = self.gpt.compute_embeddings(
+            fake_inputs = self.gpt.compute_embeddings( # type: ignore
                 gpt_cond_latent.to(self.device),
                 text_tokens,
-            )
-            gpt_generator = self.gpt.get_generator(
+            ) 
+            gpt_generator = self.gpt.get_generator( # type: ignore
                 fake_inputs=fake_inputs,
                 top_k=top_k,
                 top_p=top_p,
@@ -805,10 +817,10 @@ class Xtts(BaseTTS):
                         yield processed_wav_chunk
                         continue
 
-                    # ---- Новый путь: усечение истории до небольшого контекста ----
+                    # ---- Путь усечения истории до небольшого контекста ----
                     L = len(all_latents)
                     new_cnt = len(last_tokens)
-                    ctx_tok = min(int(left_context_tokens), max(0, L - new_cnt))
+                    ctx_tok = min(int(left_context_tokens), max(0, L - new_cnt)) # type: ignore
 
                     decode_start = L - (ctx_tok + new_cnt)
                     if decode_start < 0:
@@ -924,12 +936,12 @@ class Xtts(BaseTTS):
         )
 
     @staticmethod
-    def init_from_config(config: "XttsConfig", **kwargs):  # pylint: disable=unused-argument
+    def init_from_config(config: "XttsConfig", **kwargs):  # pylint: disable=unused-argument # type: ignore
         return Xtts(config)
 
     def eval(self):  # pylint: disable=redefined-builtin
         """Sets the model to evaluation mode. Overrides the default eval() method to also set the GPT model to eval mode."""
-        self.gpt.init_gpt_for_inference()
+        self.gpt.init_gpt_for_inference() # type: ignore
         super().eval()
 
     def get_compatible_checkpoint_state_dict(self, model_path):
@@ -1016,7 +1028,7 @@ class Xtts(BaseTTS):
 
     def load_checkpoint(
         self,
-        config: "XttsConfig",
+        config: "XttsConfig", # type: ignore
         checkpoint_dir: str | None = None,
         checkpoint_path: str | None = None,
         vocab_path: str | None = None,
@@ -1042,7 +1054,7 @@ class Xtts(BaseTTS):
         if checkpoint_dir is not None and Path(checkpoint_dir).is_file():
             msg = f"You passed a file to `checkpoint_dir=`. Use `checkpoint_path={checkpoint_dir}` instead."
             raise ValueError(msg)
-        model_path = checkpoint_path or os.path.join(checkpoint_dir, "model.pth")
+        model_path = checkpoint_path or os.path.join(checkpoint_dir, "model.pth") # type: ignore
         if vocab_path is None:
             if checkpoint_dir is not None and (Path(checkpoint_dir) / "vocab.json").is_file():
                 vocab_path = str(Path(checkpoint_dir) / "vocab.json")
@@ -1057,7 +1069,7 @@ class Xtts(BaseTTS):
         if speaker_file_path is not None and os.path.exists(speaker_file_path):
             self.speaker_manager = SpeakerManager(speaker_file_path)
 
-        if os.path.exists(vocab_path):
+        if os.path.exists(vocab_path): # type: ignore
             self.tokenizer = VoiceBpeTokenizer(vocab_file=vocab_path)
         else:
             msg = (
@@ -1075,13 +1087,13 @@ class Xtts(BaseTTS):
             self.load_state_dict(checkpoint, strict=strict)
         except:
             if eval:
-                self.gpt.init_gpt_for_inference(kv_cache=self.args.kv_cache)
+                self.gpt.init_gpt_for_inference(kv_cache=self.args.kv_cache) # type: ignore
             self.load_state_dict(checkpoint, strict=strict)
 
         if eval:
             self.hifigan_decoder.eval()
-            self.gpt.init_gpt_for_inference(kv_cache=self.args.kv_cache, use_deepspeed=use_deepspeed)
-            self.gpt.eval()
+            self.gpt.init_gpt_for_inference(kv_cache=self.args.kv_cache, use_deepspeed=use_deepspeed) # type: ignore
+            self.gpt.eval() # type: ignore
 
     def train_step(self):
         raise NotImplementedError(
