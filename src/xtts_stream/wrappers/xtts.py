@@ -143,10 +143,17 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
             )
 
         generator = await asyncio.to_thread(_make_gen)
-        while True:
+        _sentinel = object()
+
+        def _next_chunk():
             try:
-                chunk = await asyncio.to_thread(next, generator)
+                return next(generator)
             except StopIteration:
+                return _sentinel
+
+        while True:
+            chunk = await asyncio.to_thread(_next_chunk)
+            if chunk is _sentinel:
                 break
             if chunk is None:
                 continue
