@@ -1,10 +1,26 @@
 # client_min.py
 import os, json, base64, asyncio, websockets, sys
+from urllib.parse import urlencode
 
-URI = os.environ.get(
-    "WS_URI",
-    "ws://127.0.0.1:8000/v1/text-to-speech/VOICE123/stream-input?model_id=eleven_flash_v2_5&output_format=pcm_24000"
+BASE_URI = os.environ.get(
+    "WS_URI_BASE",
+    "ws://127.0.0.1:8000/v1/text-to-speech/VOICE123/stream-input",
 )
+
+query_params = {
+    "output_format": os.environ.get("WS_OUTPUT_FORMAT", "pcm_24000"),
+    "inactivity_timeout": os.environ.get("WS_INACTIVITY_TIMEOUT", "20"),
+    "sync_alignment": os.environ.get("WS_SYNC_ALIGNMENT", "false"),
+    "stream_chunk_size": os.environ.get("WS_STREAM_CHUNK_SIZE", "20"),
+    "overlap_wav_len": os.environ.get("WS_OVERLAP_WAV_LEN", "512"),
+    "speed": os.environ.get("WS_SPEED", "1.0"),
+}
+
+left_ctx = os.environ.get("WS_LEFT_CONTEXT_SECONDS")
+if left_ctx is not None:
+    query_params["left_context_seconds"] = left_ctx
+
+URI = os.environ.get("WS_URI", f"{BASE_URI}?{urlencode(query_params)}")
 
 async def main():
     async with websockets.connect(URI, extra_headers={"xi-api-key": "dummy"}) as ws:

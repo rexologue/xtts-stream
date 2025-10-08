@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import AsyncIterator, List, Optional
 
 import numpy as np
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
@@ -38,7 +40,19 @@ MAX_CONCURRENCY = settings.service.max_concurrency
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    global tts_wrapper
+    tts_wrapper = XttsStreamingWrapper.from_settings(settings.model)
+    logger.info("XTTS model initialised and ready for generation.")
+    try:
+        yield
+    finally:
+        if tts_wrapper is not None:
+            await tts_wrapper.close()
+
+
+app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -210,21 +224,6 @@ async def ws_stream_input(ws: WebSocket, voice_id: str):  # noqa: D401
 
     except WebSocketDisconnect:
         return
-
-
-@app.on_event("startup")
-def _startup() -> None:
-    global tts_wrapper
-    tts_wrapper = XttsStreamingWrapper.from_settings(settings.model)
-    logger.info("XTTS model initialised and ready for generation.")
-
-
-@app.on_event("shutdown")
-async def _shutdown() -> None:
-    if tts_wrapper is not None:
-        await tts_wrapper.close()
-
-
 if __name__ == "__main__":
     uvicorn.run(
         app,
