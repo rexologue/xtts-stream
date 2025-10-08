@@ -36,6 +36,53 @@ class StreamGenerationConfig(GenerationConfig):
 
 
 class NewGenerationMixin(GenerationMixin):
+    def _validate_assistant(
+        self,
+        assistant_model: PreTrainedModel | None,
+        tokenizer,
+        assistant_tokenizer,
+    ) -> None:
+        """Compatibility shim for older ``transformers`` releases.
+
+        ``GenerationMixin`` in newer versions of ``transformers`` provides an
+        ``_validate_assistant`` helper that ensures the (optional) assistant
+        model and tokenizer are configured correctly. The streaming mixin in
+        this project relies on that helper, but the version of
+        ``transformers`` available in our environment predates the method. The
+        absence of the helper raises an ``AttributeError`` during streaming
+        generation. To keep behaviour aligned with upstream expectations we
+        re-implement the small subset of validations required for our use
+        case.
+        """
+
+        if assistant_model is None:
+            if assistant_tokenizer is not None:
+                raise ValueError(
+                    "`assistant_tokenizer` was provided without an `assistant_model`."
+                )
+            return
+
+        if tokenizer is None:
+            raise ValueError(
+                "`tokenizer` must be provided when using an `assistant_model` for generation."
+            )
+
+        if assistant_tokenizer is None:
+            assistant_tokenizer = tokenizer
+
+        try:
+            same_vocab = assistant_tokenizer.get_vocab() == tokenizer.get_vocab()
+        except AttributeError:
+            same_vocab = assistant_tokenizer == tokenizer
+
+        if not same_vocab:
+            raise ValueError("Assistant tokenizer must share the same vocabulary as the main tokenizer.")
+
+        if assistant_model.config.is_encoder_decoder != self.config.is_encoder_decoder:
+            raise ValueError(
+                "`assistant_model` must match the encoder/decoder type of the main model."
+            )
+
     @torch.inference_mode()
     def generate(  # noqa: PLR0911
         self,
@@ -458,6 +505,8 @@ class NewGenerationMixin(GenerationMixin):
 
 def init_stream_support():
     """Overload PreTrainedModel for streaming."""
+    if not hasattr(PreTrainedModel, "_validate_assistant"):
+        PreTrainedModel._validate_assistant = NewGenerationMixin._validate_assistant
     PreTrainedModel.generate_stream = NewGenerationMixin.generate
     PreTrainedModel.sample_stream = NewGenerationMixin.sample_stream
 
