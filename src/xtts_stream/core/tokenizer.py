@@ -8,8 +8,8 @@ import torch
 from num2words import num2words
 from tokenizers import Tokenizer
 
-from text.cleaners import collapse_whitespace, lowercase
-from zh_num2words import TextNorm as zh_num2words
+from xtts_stream.resources.text.cleaners import collapse_whitespace, lowercase
+from xtts_stream.core.zh_num2words import TextNorm as zh_num2words
 
 logger = logging.getLogger(__name__)
 

@@ -1,11 +1,23 @@
 """Set of default text cleaners"""
 
+import importlib
+import importlib.util
 import re
 from unicodedata import normalize
 
 from anyascii import anyascii
 
-from TTS.tts.utils.text.chinese_mandarin.numbers import replace_numbers_to_characters_in_text
+_MANDARIN_NUMBERS_MODULE = "TTS.tts.utils.text.chinese_mandarin.numbers"
+if importlib.util.find_spec("TTS") is not None:
+    _mandarin_numbers = importlib.import_module(_MANDARIN_NUMBERS_MODULE)
+    replace_numbers_to_characters_in_text = getattr(
+        _mandarin_numbers, "replace_numbers_to_characters_in_text"
+    )
+else:
+    def replace_numbers_to_characters_in_text(text: str) -> str:
+        """Fallback normaliser when Coqui TTS utilities are unavailable."""
+
+        return text
 
 from .english.abbreviations import abbreviations_en
 from .english.number_norm import normalize_numbers as en_normalize_numbers
