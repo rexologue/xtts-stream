@@ -1,39 +1,19 @@
-import torch
-from torch import nn
-from coqpit import Coqpit
+"""Compatibility shim for the legacy `base_tts` module."""
 
+from pathlib import Path
+import runpy
+import sys
 
-class BaseTTS(nn.Module):
-    """Minimal base class providing device bookkeeping for inference-only models."""
+_ROOT = Path(__file__).resolve().parent
+_SRC = _ROOT / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
 
-    def __init__(self, config: Coqpit):
-        super().__init__()
-        self.config = config
-        self.args = getattr(config, "model_args", config)
-        self._device = torch.device("cpu")
-
-    @property
-    def device(self) -> torch.device:
-        try:
-            return next(self.parameters()).device
-        except StopIteration:
-            return self._device
-
-    def to(self, *args, **kwargs):  # type: ignore[override]
-        module = super().to(*args, **kwargs)
-        self._device = self.device
-        return module
-
-    def cpu(self):  # type: ignore[override]
-        return self.to(torch.device("cpu"))
-
-    def cuda(self, device: int | None = None):  # type: ignore[override]
-        target = torch.device("cuda" if device is None else f"cuda:{device}")
-        return self.to(target)
-
-    def clone_voice(self, *args, **kwargs):
-        voice, _ = self._clone_voice(*args, **kwargs)
-        return voice
-
-    def _clone_voice(self, *args, **kwargs):  # pragma: no cover - implemented by subclasses
-        raise NotImplementedError
+if __name__ == "__main__":
+    runpy.run_module("xtts_stream.core.base_tts", run_name="__main__")
+else:
+    _module = __import__("xtts_stream.core.base_tts", fromlist=["*"])
+    globals().update({k: getattr(_module, k) for k in dir(_module) if not k.startswith("__")})
+    if hasattr(_module, "__all__"):
+        __all__ = _module.__all__  # type: ignore
+    sys.modules.setdefault(__name__, _module)
