@@ -17,6 +17,11 @@ from transformers import (
 )
 from transformers.generation.utils import GenerateOutput, logger
 
+try:
+    from transformers.generation.configuration_utils import GenerationMode
+except ImportError:  # pragma: no cover - older ``transformers`` releases
+    GenerationMode = None  # type: ignore[assignment]
+
 
 def setup_seed(seed: int) -> None:
     if seed == -1:
@@ -271,9 +276,34 @@ class NewGenerationMixin(GenerationMixin):
             and not self.config.is_encoder_decoder
         ):
             max_cache_length += inputs_tensor.shape[1]
-        self._prepare_cache_for_generation(
-            generation_config, model_kwargs, assistant_model, batch_size, max_cache_length, 'cuda'
-        )
+        prepare_cache_signature = inspect.signature(self._prepare_cache_for_generation)
+        prepare_cache_kwargs: dict[str, object] = {}
+        for name in prepare_cache_signature.parameters:
+            if name == "self":
+                continue
+            if name == "generation_config":
+                prepare_cache_kwargs[name] = generation_config
+            elif name == "model_kwargs":
+                prepare_cache_kwargs[name] = model_kwargs
+            elif name == "assistant_model":
+                prepare_cache_kwargs[name] = assistant_model
+            elif name == "generation_mode":
+                if hasattr(generation_config, "get_generation_mode"):
+                    prepare_cache_kwargs[name] = generation_config.get_generation_mode(assistant_model)
+                else:
+                    if GenerationMode is None:
+                        raise RuntimeError(
+                            "`GenerationMode` is not available in this transformers version and"
+                            " `_prepare_cache_for_generation` expects a `generation_mode` argument."
+                        )
+                    prepare_cache_kwargs[name] = GenerationMode.SAMPLE
+            elif name == "batch_size":
+                prepare_cache_kwargs[name] = batch_size
+            elif name == "max_cache_length":
+                prepare_cache_kwargs[name] = max_cache_length
+            elif name in {"device", "device_type"}:
+                prepare_cache_kwargs[name] = self.device
+        self._prepare_cache_for_generation(**prepare_cache_kwargs)
 
         if self.device.type != input_ids.device.type:
             warnings.warn(
