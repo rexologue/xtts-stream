@@ -13,6 +13,7 @@ import json
 import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import AsyncIterator, List, Optional
 
 import numpy as np
@@ -20,11 +21,19 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
+from xtts_stream.service.settings import SettingsError, load_settings
 from xtts_stream.wrappers.base import StreamGenerationConfig, StreamingTTSWrapper
 from xtts_stream.wrappers.xtts import XttsStreamingWrapper
 
 
-MAX_CONCURRENCY = int(os.environ.get("XTTS_MAX_CONCURRENCY", "1"))
+CONFIG_PATH = Path(os.environ.get("XTTS_SETTINGS_FILE", "config.yaml")).resolve()
+
+try:
+    settings = load_settings(CONFIG_PATH)
+except SettingsError as exc:
+    raise RuntimeError(str(exc)) from exc
+
+MAX_CONCURRENCY = settings.service.max_concurrency
 
 app = FastAPI()
 app.add_middleware(
@@ -203,7 +212,7 @@ async def ws_stream_input(ws: WebSocket, voice_id: str):  # noqa: D401
 @app.on_event("startup")
 def _startup() -> None:
     global tts_wrapper
-    tts_wrapper = XttsStreamingWrapper.from_environment()
+    tts_wrapper = XttsStreamingWrapper.from_settings(settings.model)
 
 
 @app.on_event("shutdown")
@@ -213,4 +222,8 @@ async def _shutdown() -> None:
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8000")))
+    uvicorn.run(
+        app,
+        host=settings.service.host,
+        port=settings.service.port,
+    )

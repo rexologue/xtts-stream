@@ -14,6 +14,7 @@ import torch
 
 from xtts_stream.core.xtts import Xtts
 from xtts_stream.core.xtts_config import XttsArgs, XttsAudioConfig, XttsConfig
+from xtts_stream.service.settings import ResolvedModelSettings
 from xtts_stream.wrappers.base import StreamGenerationConfig, StreamingTTSWrapper
 
 
@@ -100,6 +101,22 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
             speaker_wav=speaker,
             device=device,
             language=language,
+        )
+
+    @classmethod
+    def from_settings(cls, settings: ResolvedModelSettings) -> "XttsStreamingWrapper":
+        device = settings.device
+        if device == "auto":
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        cfg = load_config(settings.config_path)
+        return cls(
+            cfg=cfg,
+            checkpoint=settings.checkpoint_path,
+            tokenizer=settings.tokenizer_path,
+            speaker_wav=settings.speaker_wav,
+            device=device,
+            language=settings.language,
         )
 
     async def stream(
