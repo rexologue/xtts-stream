@@ -4,9 +4,11 @@ fsspec
 librosa
 noisereduce
 numpy
+anyascii
 einops
 pyyaml
 num2words
+inflect
 packaging
 scipy
 soundfile

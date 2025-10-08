@@ -31,6 +31,36 @@ The requirements list assumes CUDA-enabled wheels for PyTorch/Torchaudio are
 available on your system. Install the appropriate builds for your environment
 before running inference.
 
+## Configuration
+
+Service settings and model paths are loaded from a YAML configuration file.
+
+1. Copy `config.example.yaml` to `config.yaml` (or another filename of your
+   choice):
+
+   ```bash
+   cp config.example.yaml config.yaml
+   ```
+
+2. Edit the file to point at your XTTS checkpoint directory and reference
+   speaker audio. Required artefacts inside the model directory are:
+
+   - `config.json`
+   - `model.pth`
+   - `dvae.pth`
+   - `mel_stats.pth`
+   - `vocab.json`
+
+   You can also override the device, default language, and optional filenames in
+   the same section.
+
+3. By default the service reads `config.yaml` from the repository root. To use a
+   custom path, set `XTTS_SETTINGS_FILE` before launching any commands:
+
+   ```bash
+   export XTTS_SETTINGS_FILE=/absolute/path/to/your-config.yaml
+   ```
+
 ## Usage
 
 1. Download an XTTS checkpoint directory containing:
@@ -79,6 +109,9 @@ PYTHONPATH=src python -m xtts_stream.core.infer_xtts \
 
 The websocket service lives in `src/xtts_stream/service/app.py` and exposes the
 ElevenLabs-compatible `stream-input` protocol. Start it with:
+
+Ensure your configuration file is in place (see the [Configuration](#configuration)
+section) and start the service with:
 
 ```bash
 PYTHONPATH=src python -m xtts_stream.service.app
