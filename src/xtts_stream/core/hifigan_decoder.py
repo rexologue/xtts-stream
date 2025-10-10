@@ -3,9 +3,9 @@ from typing import Any
 
 import torch
 
-from xtts_stream.inference.generic_utils import load_fsspec
-from xtts_stream.inference.hifigan_generator import HifiganGenerator
-from xtts_stream.inference.resnet import ResNetSpeakerEncoder
+from xtts_stream.core.generic_utils import load_fsspec
+from xtts_stream.core.hifigan_generator import HifiganGenerator
+from xtts_stream.core.resnet import ResNetSpeakerEncoder
 
 logger = logging.getLogger(__name__)
 

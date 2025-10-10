@@ -1,3 +1,3 @@
 """High-level package for the XTTS streaming inference stack."""
 
-__all__ = ["inference", "websocket_api", "wrappers"]
+__all__ = ["core", "service", "wrappers", "client"]

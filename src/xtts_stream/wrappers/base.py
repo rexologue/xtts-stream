@@ -2,7 +2,7 @@
 
 This module defines a minimal interface that mimics the semantics of the
 ElevenLabs streaming API. Concrete wrappers are expected to translate between
-model specific calls and the websocket layer exposed by :mod:`xtts_stream.websocket_api.server`.
+model specific calls and the websocket layer exposed by :mod:`xtts_stream.service`.
 
 Creating a new wrapper
 ======================
@@ -16,7 +16,7 @@ To add support for another model you only need to implement the
    parameters understood by the websocket handler.
 3. Expose a convenience constructor (for example ``from_env``) that instantiates
    the wrapper from configuration files, checkpoints and voice references.
-4. Update :mod:`xtts_stream.websocket_api.server.app` so it imports and instantiates your new
+4. Update :mod:`xtts_stream.service.app` so it imports and instantiates your new
    wrapper class. The websocket layer itself is model agnostic and only relies on
    the base interface.
 
