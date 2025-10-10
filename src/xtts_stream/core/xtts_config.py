@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 
-from xtts_stream.inference.shared_configs import BaseTTSConfig
-from xtts_stream.inference.xtts import XttsArgs, XttsAudioConfig
+from xtts_stream.core.shared_configs import BaseTTSConfig
+from xtts_stream.core.xtts import XttsArgs, XttsAudioConfig
 
 
 @dataclass

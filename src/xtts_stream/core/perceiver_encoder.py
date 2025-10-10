@@ -9,8 +9,8 @@ from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
 from torch import einsum, nn
 
-from xtts_stream.inference.transformer import GEGLU
-from xtts_stream.inference.generic_utils import default, exists
+from xtts_stream.core.transformer import GEGLU
+from xtts_stream.core.generic_utils import default, exists
 
 
 def once(fn):

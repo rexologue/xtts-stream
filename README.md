@@ -1,15 +1,18 @@
 # XTTS Stream Inference
 
-Пакет предназначен для развёртывания inference-стека XTTS и потокового WebSocket API, совместимого с протоколом ElevenLabs `stream-input`.
+XTTS Stream Inference is a focused voice-cloning runtime that keeps only the
+modules required to run the XTTS architecture. It bundles the autoregressive
+GPT, perceiver resampler, HiFi-GAN decoder, text normalisation helpers, and a
+FastAPI streaming service so the full inference pipeline is ready out of the box.
 
-## Возможности
+## Features
 
-- Клонирование голосов и извлечение эмбеддингов из референсного аудио.
-- Мультиязычная нормализация текста, сплиттер предложений и кэширование голосов.
-- CLI для офлайн-генерации WAV и потоковый режим выдачи.
-- WebSocket-сервис на FastAPI, который повторяет контракт ElevenLabs и может использоваться «из коробки».
+- Voice cloning utilities for extracting conditioning latents from reference audio.
+- Sentence splitting, multilingual normalisation, and voice caching helpers.
+- Minimal command-line interface for offline synthesis.
+- ElevenLabs-compatible websocket endpoint for real-time streaming.
 
-## Установка
+## Installation
 
 ```bash
 python -m venv .venv
@@ -17,98 +20,123 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Добавьте репозиторий в `PYTHONPATH` перед запуском любых модулей:
+Add the repository to the Python path before running any commands (from the
+repository root):
 
 ```bash
 export PYTHONPATH="$(pwd)/src"
 ```
 
-Убедитесь, что в системе установлены подходящие колёса `torch`/`torchaudio` с поддержкой вашей GPU (или CPU).
+The requirements list assumes CUDA-enabled wheels for PyTorch/Torchaudio are
+available on your system. Install the appropriate builds for your environment
+before running inference.
 
-## Конфигурация модели
+## Configuration
 
-Сервис и CLI читают настройки из YAML-файла. Скопируйте пример и отредактируйте пути к весам:
+Service settings and model paths are loaded from a YAML configuration file.
+
+1. Copy `config.example.yaml` to `config.yaml` (or another filename of your
+   choice):
+
+   ```bash
+   cp config.example.yaml config.yaml
+   ```
+
+2. Edit the file to point at your XTTS checkpoint directory and reference
+   speaker audio. Required artefacts inside the model directory are:
+
+   - `config.json`
+   - `model.pth`
+   - `dvae.pth`
+   - `mel_stats.pth`
+   - `vocab.json`
+
+   You can also override the device, default language, and optional filenames in
+   the same section.
+
+3. By default the service reads `config.yaml` from the repository root. To use a
+   custom path, set `XTTS_SETTINGS_FILE` before launching any commands:
+
+   ```bash
+   export XTTS_SETTINGS_FILE=/absolute/path/to/your-config.yaml
+   ```
+
+## Usage
+
+1. Download an XTTS checkpoint directory containing:
+   - `model.pth`
+   - `config.json`
+   - `vocab.json`
+   - `speakers_xtts.pth` (optional but recommended for speaker libraries)
+2. Provide a reference utterance (≥3 seconds) for cloning the target voice.
+
+Run offline inference:
 
 ```bash
-cp config.example.yaml config.yaml
-```
-
-Минимально необходимы файлы:
-
-- `config.json`
-- `model.pth`
-- `dvae.pth`
-- `mel_stats.pth`
-- `vocab.json`
-
-Положите их в одну директорию и укажите путь в секции `model` вашего `config.yaml`. Для использования альтернативного пути задайте переменную окружения:
-
-```bash
-export XTTS_SETTINGS_FILE=/абсолютный/путь/к/config.yaml
-```
-
-## Офлайн-использование
-
-Убедитесь, что скачали директорию с весами XTTS (`model.pth`, `config.json`, `vocab.json`, опционально `speakers_xtts.pth`) и подготовили референсную озвучку ≥3 секунд. Запустите CLI в потоковом или пакетном режиме:
-
-```bash
-PYTHONPATH=src python -m xtts_stream.inference.infer_xtts \
+PYTHONPATH=src python -m xtts_stream.core.infer_xtts \
   --config /path/to/config.json \
   --checkpoint /path/to/model.pth \
   --tokenizer /path/to/vocab.json \
   --speakers /path/to/speakers_xtts.pth \
-  --text "Текст для синтеза" \
-  --language ru \
+  --text "Your text goes here" \
+  --language en \
   --reference /path/to/reference.wav \
   --output ./generated.wav
 ```
 
-Флаг `--stream` включает вывод аудио по мере генерации:
+Set `--device cpu` if you do not have a GPU available. Advanced sampling
+controls (temperature, top-k/p, length penalties, speed, etc.) can be overridden
+via CLI flags; see `python -m xtts_stream.core.infer_xtts --help` for the full
+list.
+
+To stream audio chunks while they are generated, add `--stream` (optionally
+configuring `--stream-chunk-size` and `--stream-overlap`):
 
 ```bash
-PYTHONPATH=src python -m xtts_stream.inference.infer_xtts \
+PYTHONPATH=src python -m xtts_stream.core.infer_xtts \
   --config /path/to/config.json \
   --checkpoint /path/to/model.pth \
   --tokenizer /path/to/vocab.json \
+  --speakers /path/to/speakers_xtts.pth \
+  --text "Your text goes here" \
+  --language en \
   --reference /path/to/reference.wav \
   --output ./generated.wav \
   --stream
 ```
 
-Подробнее о параметрах см. `python -m xtts_stream.inference.infer_xtts --help`.
+### Streaming service
 
-## Потоковый WebSocket-сервис
+The websocket service lives in `src/xtts_stream/service/app.py` and exposes the
+ElevenLabs-compatible `stream-input` protocol. Start it with:
 
-Все компоненты собраны в `src/xtts_stream/websocket_api/`:
-
-- `server/app.py` — FastAPI-приложение.
-- `server/settings.py` — загрузка и валидация конфигурации.
-- `client/example.py` — пример клиента, совместимого с протоколом ElevenLabs.
-- `README.md` — краткое описание запуска.
-
-Запуск сервера:
+Ensure your configuration file is in place (see the [Configuration](#configuration)
+section) and start the service with:
 
 ```bash
-PYTHONPATH=src python -m xtts_stream.websocket_api.server.app
+PYTHONPATH=src python -m xtts_stream.service.app
 ```
 
-Пример клиента:
+Wrapper classes located under `src/xtts_stream/wrappers` provide reusable hooks
+for other models. Implement `xtts_stream.wrappers.base.StreamingTTSWrapper` for
+new backends and import your implementation inside the service module.
 
-```bash
-python -m xtts_stream.websocket_api.client.example \
-  --host 127.0.0.1 --port 60215 --voice-id demo \
-  --sr 24000 --text "Привет, это тест" --play --no-save
-```
+## Repository layout
 
-## Структура репозитория
+- `src/xtts_stream/core/` – XTTS inference stack (autoregressive GPT, vocoder,
+  tokenisers, helpers, etc.).
+- `src/xtts_stream/service/` – FastAPI application exposing the ElevenLabs
+  compatible websocket endpoint.
+- `src/xtts_stream/wrappers/` – reusable abstractions for streaming TTS engines.
+- `src/xtts_stream/client/` – reference websocket client mirroring the
+  ElevenLabs streaming format.
 
-- `src/xtts_stream/inference/` — реализация inference-стека XTTS (GPT, Perceiver, HiFi-GAN, токенизаторы, вспомогательные утилиты).
-- `src/xtts_stream/websocket_api/` — сервер и клиент WebSocket API.
-- `src/xtts_stream/wrappers/` — абстракции для подключения других моделей к потоковому сервису.
-- `src/xtts_stream/resources/` — дополнительные данные (например, конфиги языков).
+## Notes
 
-## Полезные заметки
+- Sentence splitting uses spaCy language pipelines when `--split-text` is set.
+  Install the corresponding spaCy language models as needed.
+- Noise reduction (via `noisereduce`) is applied to streaming output chunks.
+  Comment the call in `xtts_stream.core.xtts::_apply_noise_reduction` if a raw
+  waveform is preferred.
 
-- Для опции `--split-text` CLI использует пайплайны spaCy — установите соответствующие модели.
-- Потоковый вывод по умолчанию включает шумоподавление; отключите вызов в `xtts_stream.inference.xtts::_apply_noise_reduction`, если нужен «сырой» сигнал.
-- Архитектура XTTS была изначально опубликована компанией Coqui.
+The XTTS architecture was originally created and open-sourced by Coqui.

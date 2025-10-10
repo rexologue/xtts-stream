@@ -14,8 +14,8 @@ import numpy as np
 import soundfile as sf
 import torch
 
-from xtts_stream.inference.xtts import StreamingMetrics, Xtts
-from xtts_stream.inference.xtts_config import XttsArgs, XttsAudioConfig, XttsConfig
+from xtts_stream.core.xtts import StreamingMetrics, Xtts
+from xtts_stream.core.xtts_config import XttsArgs, XttsAudioConfig, XttsConfig
 
 from ruaccent import RUAccent
 

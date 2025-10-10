@@ -11,7 +11,7 @@ from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions
 # TODO: use torch.isin from Pytorch 2.4
 from transformers.pytorch_utils import isin_mps_friendly as isin
 
-from xtts_stream.inference.arch_utils import AttentionBlock, TypicalLogitsWarper
+from xtts_stream.core.arch_utils import AttentionBlock, TypicalLogitsWarper
 
 def null_position_embeddings(range, dim):
     return torch.zeros((range.shape[0], range.shape[1], dim), device=range.device)
