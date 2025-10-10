@@ -1,6 +1,4 @@
-"""
-FastAPI app exposing a streaming TTS websocket compatible with ElevenLabs "stream-input".
-"""
+"""FastAPI-приложение, экспонирующее ElevenLabs-совместимый WebSocket."""
 
 from __future__ import annotations
 
@@ -22,7 +20,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-from xtts_stream.service.settings import SettingsError, load_settings
+from xtts_stream.websocket_api.server.settings import SettingsError, load_settings
 from xtts_stream.wrappers.base import StreamGenerationConfig, StreamingTTSWrapper
 from xtts_stream.wrappers.xtts import XttsStreamingWrapper
 

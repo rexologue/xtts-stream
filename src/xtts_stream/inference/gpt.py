@@ -7,15 +7,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers import GPT2Config
 
-from xtts_stream.core.autoregressive import (
+from xtts_stream.inference.autoregressive import (
     ConditioningEncoder,
     LearnedPositionEmbeddings,
     _prepare_attention_mask_for_generation,
     build_hf_gpt_transformer,
 )
 
-from xtts_stream.core.gpt_inference import GPT2InferenceModel
-from xtts_stream.core.perceiver_encoder import PerceiverResampler
+from xtts_stream.inference.gpt_inference import GPT2InferenceModel
+from xtts_stream.inference.perceiver_encoder import PerceiverResampler
 
 
 class GPT(nn.Module):

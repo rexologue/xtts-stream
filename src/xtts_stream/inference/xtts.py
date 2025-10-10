@@ -10,15 +10,15 @@ import torch
 import torch.nn.functional as F
 import torchaudio
 from coqpit import Coqpit
-from xtts_stream.core.generic_utils import load_fsspec
+from xtts_stream.inference.generic_utils import load_fsspec
 from scipy.signal import butter, lfilter
 import noisereduce as nr
 import numpy as np
 
-from xtts_stream.core.shared_configs import BaseTTSConfig
-from xtts_stream.core.gpt import GPT
-from xtts_stream.core.hifigan_decoder import HifiDecoder
-from xtts_stream.core.stream_generator import init_stream_support
+from xtts_stream.inference.shared_configs import BaseTTSConfig
+from xtts_stream.inference.gpt import GPT
+from xtts_stream.inference.hifigan_decoder import HifiDecoder
+from xtts_stream.inference.stream_generator import init_stream_support
 
 
 @dataclass
@@ -28,10 +28,10 @@ class StreamingMetrics:
     real_time_factor: float | None
     latency: float  # average chunk generation time
 
-from xtts_stream.core.tokenizer import VoiceBpeTokenizer, split_sentence
-from xtts_stream.core.xtts_manager import LanguageManager, SpeakerManager
-from xtts_stream.core.base_tts import BaseTTS
-from xtts_stream.core.generic_utils import (
+from xtts_stream.inference.tokenizer import VoiceBpeTokenizer, split_sentence
+from xtts_stream.inference.xtts_manager import LanguageManager, SpeakerManager
+from xtts_stream.inference.base_tts import BaseTTS
+from xtts_stream.inference.generic_utils import (
     is_pytorch_at_least_2_4,
     warn_synthesize_config_deprecated,
     warn_synthesize_speaker_id_deprecated,
