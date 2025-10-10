@@ -1,0 +1,27 @@
+version: "3.9"
+services:
+  xtts-ws:
+    build: .
+    image: xtts-stream:latest
+    ports:
+      - "8000:8000"
+    environment:
+      XTTS_SETTINGS_FILE: /app/config.yaml
+      API_PORT: "8000"
+    volumes:
+      - ${XTTS_SETTINGS_FILE:?XTTS_SETTINGS_FILE must be set to your config path}:/app/config.yaml:ro
+      # Mount your XTTS checkpoint and reference audio inside the container, e.g.:
+      # - /abs/path/to/xtts-checkpoint:/models:ro
+      # - /abs/path/to/reference:/reference:ro
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    device_requests:
+      - driver: nvidia
+        count: all
+        capabilities: [gpu]
