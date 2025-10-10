@@ -12,29 +12,40 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 WORKDIR /app
 
-# System dependencies for Python 3.10, audio processing and build tooling
+# ------------------------------------------------------------------------------
+# Install Python 3.12 + system dependencies for audio processing and build tools
+# ------------------------------------------------------------------------------
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        python3 \
-        python3-venv \
-        python3-pip \
-        python3-dev \
-        build-essential \
-        git \
-        curl \
-        ffmpeg \
-        libsndfile1 \
-        libgl1 \
-        libglib2.0-0 \
-    && ln -sf /usr/bin/python3 /usr/bin/python \
-    && python -m pip install --upgrade pip \
-    && rm -rf /var/lib/apt/lists/*
+ && apt-get install -y --no-install-recommends \
+      software-properties-common \
+      build-essential \
+      git \
+      curl \
+      ffmpeg \
+      libsndfile1 \
+      libgl1 \
+      libglib2.0-0 \
+ && add-apt-repository ppa:deadsnakes/ppa -y \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends \
+      python3.12 \
+      python3.12-venv \
+      python3.12-dev \
+ && ln -sf /usr/bin/python3.12 /usr/bin/python3 \
+ && ln -sf /usr/bin/python3.12 /usr/bin/python \
+ && python3 -m ensurepip \
+ && python3 -m pip install --upgrade pip setuptools wheel \
+ && rm -rf /var/lib/apt/lists/*
 
-# Install python requirements
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# ------------------------------------------------------------------------------
+# Install Python dependencies
+# ------------------------------------------------------------------------------
+COPY requirements_locked.txt /app/requirements.txt
+RUN python3 -m pip install --no-cache-dir -r /app/requirements.txt && rm -rf /root/.cache/pip /tmp/*
 
+# ------------------------------------------------------------------------------
 # Copy the application code
+# ------------------------------------------------------------------------------
 COPY src ./src
 
 # Runtime will fail fast if XTTS_SETTINGS_FILE is not provided
@@ -45,3 +56,4 @@ EXPOSE ${API_PORT}
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["python", "-m", "xtts_stream.api.service.app"]
+
