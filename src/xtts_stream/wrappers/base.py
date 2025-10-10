@@ -38,7 +38,7 @@ class StreamGenerationConfig:
 
     stream_chunk_size: int
     overlap_wav_len: int
-    left_context_seconds: Optional[int]
+    left_context_seconds: Optional[float]
     speed: float
     language: Optional[str] = None
 
