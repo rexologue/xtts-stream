@@ -14,8 +14,8 @@ import torch
 
 from xtts_stream.core.xtts import Xtts
 from xtts_stream.core.xtts_config import XttsArgs, XttsAudioConfig, XttsConfig
-from xtts_stream.service.settings import ResolvedModelSettings
-from xtts_stream.wrappers.base import StreamGenerationConfig, StreamingTTSWrapper
+from xtts_stream.api.service.settings import ResolvedModelSettings
+from xtts_stream.api.wrappers.base import StreamGenerationConfig, StreamingTTSWrapper
 
 
 def _filter_kwargs(cls, data: dict) -> dict:

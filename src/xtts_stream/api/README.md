@@ -24,7 +24,7 @@
 (Из корневой директории)
 
 ```bash
-XTTS_SETTINGS_FILE=/путь/до/вашего/config.yaml PYTHONPATH=src python -m xtts_stream.service.app
+XTTS_SETTINGS_FILE=/путь/до/вашего/config.yaml PYTHONPATH=src python -m xtts_stream.api.service.app
 ```
 
 4. Прогоните клиент (пример):
@@ -88,7 +88,7 @@ model:
 (Из корневой директории)
 
 ```bash
-XTTS_SETTINGS_FILE=/путь/до/вашего/config.yaml PYTHONPATH=src python -m xtts_stream.service.app
+XTTS_SETTINGS_FILE=/путь/до/вашего/config.yaml PYTHONPATH=src python -m xtts_stream.api.service.app
 ```
 
 При старте:

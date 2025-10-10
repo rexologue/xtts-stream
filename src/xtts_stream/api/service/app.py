@@ -22,9 +22,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-from xtts_stream.service.settings import SettingsError, load_settings
-from xtts_stream.wrappers.base import StreamGenerationConfig, StreamingTTSWrapper
-from xtts_stream.wrappers.xtts import XttsStreamingWrapper
+from xtts_stream.api.service.settings import SettingsError, load_settings
+from xtts_stream.api.wrappers.base import StreamGenerationConfig, StreamingTTSWrapper
+from xtts_stream.api.wrappers.xtts import XttsStreamingWrapper
 
 # ======================================================================================
 # Settings & init

@@ -73,7 +73,7 @@ Service settings and model paths are loaded from a YAML configuration file.
 Run offline inference:
 
 ```bash
-PYTHONPATH=src python -m xtts_stream.core.infer_xtts \
+PYTHONPATH=src python -m xtts_stream.inference.infer_xtts \
   --config /path/to/config.json \
   --checkpoint /path/to/model.pth \
   --tokenizer /path/to/vocab.json \
@@ -86,14 +86,14 @@ PYTHONPATH=src python -m xtts_stream.core.infer_xtts \
 
 Set `--device cpu` if you do not have a GPU available. Advanced sampling
 controls (temperature, top-k/p, length penalties, speed, etc.) can be overridden
-via CLI flags; see `python -m xtts_stream.core.infer_xtts --help` for the full
+via CLI flags; see `python -m xtts_stream.inference.infer_xtts --help` for the full
 list.
 
 To stream audio chunks while they are generated, add `--stream` (optionally
 configuring `--stream-chunk-size` and `--stream-overlap`):
 
 ```bash
-PYTHONPATH=src python -m xtts_stream.core.infer_xtts \
+PYTHONPATH=src python -m xtts_stream.inference.infer_xtts \
   --config /path/to/config.json \
   --checkpoint /path/to/model.pth \
   --tokenizer /path/to/vocab.json \
@@ -107,28 +107,31 @@ PYTHONPATH=src python -m xtts_stream.core.infer_xtts \
 
 ### Streaming service
 
-The websocket service lives in `src/xtts_stream/service/app.py` and exposes the
+The websocket service lives in `src/xtts_stream/api/service/app.py` and exposes the
 ElevenLabs-compatible `stream-input` protocol. Start it with:
 
 Ensure your configuration file is in place (see the [Configuration](#configuration)
 section) and start the service with:
 
 ```bash
-PYTHONPATH=src python -m xtts_stream.service.app
+PYTHONPATH=src python -m xtts_stream.api.service.app
 ```
 
-Wrapper classes located under `src/xtts_stream/wrappers` provide reusable hooks
-for other models. Implement `xtts_stream.wrappers.base.StreamingTTSWrapper` for
+Wrapper classes located under `src/xtts_stream/api/wrappers` provide reusable hooks
+for other models. Implement `xtts_stream.api.wrappers.base.StreamingTTSWrapper` for
 new backends and import your implementation inside the service module.
 
 ## Repository layout
 
 - `src/xtts_stream/core/` – XTTS inference stack (autoregressive GPT, vocoder,
   tokenisers, helpers, etc.).
-- `src/xtts_stream/service/` – FastAPI application exposing the ElevenLabs
+- `src/xtts_stream/inference/` – command-line utilities for offline and dataset
+  streaming inference.
+- `src/xtts_stream/api/service/` – FastAPI application exposing the ElevenLabs
   compatible websocket endpoint.
-- `src/xtts_stream/wrappers/` – reusable abstractions for streaming TTS engines.
-- `src/xtts_stream/client/` – reference websocket client mirroring the
+- `src/xtts_stream/api/wrappers/` – reusable abstractions for streaming TTS
+  engines.
+- `src/xtts_stream/api/client/` – reference websocket client mirroring the
   ElevenLabs streaming format.
 
 ## Notes
