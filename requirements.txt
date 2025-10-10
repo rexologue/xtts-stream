@@ -22,3 +22,4 @@ uvicorn
 websockets
 deepspeed
 redis==6.4.0
+ruaccent

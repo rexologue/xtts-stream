@@ -12,6 +12,8 @@ from typing import AsyncIterator, Optional
 import numpy as np
 import torch
 
+from ruaccent import RUAccent
+
 from xtts_stream.core.xtts import Xtts
 from xtts_stream.core.xtts_config import XttsArgs, XttsAudioConfig, XttsConfig
 from xtts_stream.api.service.settings import ResolvedModelSettings
@@ -84,6 +86,9 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
         self.language = language
         self.device = device
 
+        self.accentizer = RUAccent()
+        self.accentizer.load(omograph_model_size='turbo3.1', use_dictionary=True, tiny_mode=False, device=device.upper())
+
     @classmethod
     def from_environment(cls) -> "XttsStreamingWrapper":
         cfg_path = Path(os.environ.get("XTTS_CONFIG", "config.json"))
@@ -126,7 +131,7 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
     ) -> AsyncIterator[np.ndarray]:
         def _make_gen():
             return self.model.inference_stream(
-                text=text,
+                text=self.accentizer.process_all(text),
                 language=options.language or self.language,
                 gpt_cond_latent=self.voice_latent,
                 speaker_embedding=self.voice_embed,

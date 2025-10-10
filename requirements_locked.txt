@@ -21,3 +21,4 @@ uvicorn==0.37.0
 websockets==15.0.1
 redis==6.4.0
 coqpit==0.0.17
+ruaccent==1.5.8.3
