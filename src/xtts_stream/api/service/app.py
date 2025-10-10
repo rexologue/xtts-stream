@@ -30,7 +30,13 @@ from xtts_stream.api.wrappers.xtts import XttsStreamingWrapper
 # Settings & init
 # ======================================================================================
 
-CONFIG_PATH = Path(os.environ.get("XTTS_SETTINGS_FILE", "config.yaml")).resolve()
+CONFIG_ENV_VAR = "XTTS_SETTINGS_FILE"
+if CONFIG_ENV_VAR not in os.environ:
+    raise RuntimeError(
+        "Environment variable XTTS_SETTINGS_FILE must point to the service configuration file."
+    )
+
+CONFIG_PATH = Path(os.environ[CONFIG_ENV_VAR]).expanduser().resolve(strict=False)
 
 try:
     settings = load_settings(CONFIG_PATH)

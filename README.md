@@ -33,17 +33,10 @@ before running inference.
 
 ## Configuration
 
-Service settings and model paths are loaded from a YAML configuration file.
-
-1. Copy `config.example.yaml` to `config.yaml` (or another filename of your
-   choice):
-
-   ```bash
-   cp config.example.yaml config.yaml
-   ```
-
-2. Edit the file to point at your XTTS checkpoint directory and reference
-   speaker audio. Required artefacts inside the model directory are:
+Service settings and model paths are loaded from a YAML configuration file. Use
+`config.example.yaml` as a template, copy it anywhere on your filesystem, and
+update the fields to point at your XTTS checkpoint directory and reference
+speaker audio. Required artefacts inside the model directory are:
 
    - `config.json`
    - `model.pth`
@@ -54,12 +47,8 @@ Service settings and model paths are loaded from a YAML configuration file.
    You can also override the device, default language, and optional filenames in
    the same section.
 
-3. By default the service reads `config.yaml` from the repository root. To use a
-   custom path, set `XTTS_SETTINGS_FILE` before launching any commands:
-
-   ```bash
-   export XTTS_SETTINGS_FILE=/absolute/path/to/your-config.yaml
-   ```
+Always set `XTTS_SETTINGS_FILE` to the absolute path of the configuration before
+launching any command that touches the service or wrappers.
 
 ## Usage
 
@@ -114,12 +103,35 @@ Ensure your configuration file is in place (see the [Configuration](#configurati
 section) and start the service with:
 
 ```bash
-PYTHONPATH=src python -m xtts_stream.api.service.app
+XTTS_SETTINGS_FILE=/absolute/path/to/config.yaml PYTHONPATH=src \
+  python -m xtts_stream.api.service.app
 ```
 
 Wrapper classes located under `src/xtts_stream/api/wrappers` provide reusable hooks
 for other models. Implement `xtts_stream.api.wrappers.base.StreamingTTSWrapper` for
 new backends and import your implementation inside the service module.
+
+### Docker deployment
+
+The repository contains a `Dockerfile` and `docker-compose.yaml` to simplify running
+the websocket API in a container. Build the image and launch the service with:
+
+```bash
+# Build the runtime image (CUDA 12.1 + cuDNN runtime)
+docker compose build
+
+# Ensure your custom config file is ready and referenced via XTTS_SETTINGS_FILE
+export XTTS_SETTINGS_FILE="$(pwd)/config.yaml"
+
+# Start the websocket API on port 8000 with GPU access
+docker compose up
+```
+
+The compose file mounts the host path provided via `XTTS_SETTINGS_FILE` into
+`/app/config.yaml`, exposes port `8000`, and requests all available NVIDIA GPUs.
+Adjust the environment variable before launching to point at the desired config
+file and add extra `volumes` entries pointing to the XTTS checkpoint directory
+and any reference audio files so they are available inside the container.
 
 ## Repository layout
 
