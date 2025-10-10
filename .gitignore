@@ -1426,5 +1426,8 @@ erl_crash.dump
 .elixir_ls/
 
 CMakeUserPresets.json
-config.yaml
 .neptune
+
+*.yaml
+!config.example.yaml
+!docker-compose.example.yaml

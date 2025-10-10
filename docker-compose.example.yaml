@@ -21,7 +21,4 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    device_requests:
-      - driver: nvidia
-        count: all
-        capabilities: [gpu]
+
