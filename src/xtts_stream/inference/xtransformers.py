@@ -7,8 +7,8 @@ from torch import einsum, nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
 
-from xtts_stream.core.generic_utils import default, exists
-from xtts_stream.core.transformer import cast_tuple, max_neg_value
+from xtts_stream.inference.generic_utils import default, exists
+from xtts_stream.inference.transformer import cast_tuple, max_neg_value
 
 DEFAULT_DIM_HEAD = 64
 

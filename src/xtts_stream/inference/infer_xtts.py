@@ -12,8 +12,8 @@ import numpy as np
 import soundfile as sf
 import torch
 
-from xtts_stream.core.xtts import Xtts
-from xtts_stream.core.xtts_config import XttsArgs, XttsAudioConfig, XttsConfig
+from xtts_stream.inference.xtts import Xtts
+from xtts_stream.inference.xtts_config import XttsArgs, XttsAudioConfig, XttsConfig
 
 
 def _filter_kwargs(cls, data: dict) -> dict:

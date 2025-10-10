@@ -9,8 +9,8 @@ import torch.nn.functional as F
 
 from transformers import LogitsProcessor
 
-from xtts_stream.core.generic_utils import is_pytorch_at_least_2_4
-from xtts_stream.core.xtransformers import ContinuousTransformerWrapper, RelativePositionBias
+from xtts_stream.inference.generic_utils import is_pytorch_at_least_2_4
+from xtts_stream.inference.xtransformers import ContinuousTransformerWrapper, RelativePositionBias
 
 
 def zero_module(module):

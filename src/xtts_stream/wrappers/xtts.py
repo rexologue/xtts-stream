@@ -12,9 +12,9 @@ from typing import AsyncIterator, Optional
 import numpy as np
 import torch
 
-from xtts_stream.core.xtts import Xtts
-from xtts_stream.core.xtts_config import XttsArgs, XttsAudioConfig, XttsConfig
-from xtts_stream.service.settings import ResolvedModelSettings
+from xtts_stream.inference.xtts import Xtts
+from xtts_stream.inference.xtts_config import XttsArgs, XttsAudioConfig, XttsConfig
+from xtts_stream.websocket_api.server.settings import ResolvedModelSettings
 from xtts_stream.wrappers.base import StreamGenerationConfig, StreamingTTSWrapper
 
 

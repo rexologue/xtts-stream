@@ -6,7 +6,7 @@ import torch.nn.functional as F
 
 from einops import rearrange
 
-from xtts_stream.core.generic_utils import exists
+from xtts_stream.inference.generic_utils import exists
 
 # ---------------------------------------------------------------------
 # Helpers

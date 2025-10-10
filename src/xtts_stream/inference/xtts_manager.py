@@ -1,6 +1,6 @@
 import torch
 
-from xtts_stream.core.generic_utils import is_pytorch_at_least_2_4
+from xtts_stream.inference.generic_utils import is_pytorch_at_least_2_4
 
 
 class SpeakerManager:

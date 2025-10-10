@@ -24,13 +24,13 @@
 (Из корневой директории)
 
 ```bash
-XTTS_SETTINGS_FILE=/путь/до/вашего/config.yaml PYTHONPATH=src python -m xtts_stream.service.app
+XTTS_SETTINGS_FILE=/путь/до/вашего/config.yaml PYTHONPATH=src python -m xtts_stream.websocket_api.server.app
 ```
 
 4. Прогоните клиент (пример):
 
 ```bash
-python example.py \
+python -m xtts_stream.websocket_api.client.example \
   --host 127.0.0.1 --port 60215 --voice-id VOICE123 \
   --sr 24000 --text "Привет, это тест." --play --no-save \
   --stream_chunk_size 3 --left_context_seconds 0.6
@@ -88,7 +88,7 @@ model:
 (Из корневой директории)
 
 ```bash
-XTTS_SETTINGS_FILE=/путь/до/вашего/config.yaml PYTHONPATH=src python -m xtts_stream.service.app
+XTTS_SETTINGS_FILE=/путь/до/вашего/config.yaml PYTHONPATH=src python -m xtts_stream.websocket_api.server.app
 ```
 
 При старте:
@@ -242,14 +242,14 @@ GET ws://<host>:<port>/v1/text-to-speech/{voice_id}/stream-input
 
 ---
 
-## Клиент `example.py` (коротко)
+## Клиент `xtts_stream.websocket_api.client.example` (коротко)
 
 * Подключается к серверу, отправляет `ttsInitRequest`, стримит текст, делает `flush`, затем финальный `"text": ""`.
 * Умеет **сохранять в WAV** и/или **проигрывать вживую через `ffplay`** (`--play`).
 * По умолчанию **не** включает расписание «по кадрам». Для чистого стрима используйте маленький `--stream_chunk_size` и `--left_context_seconds`:
 
 ```bash
-python example.py \
+python -m xtts_stream.websocket_api.client.example \
   --host 127.0.0.1 --port 60215 --voice-id VOICE123 \
   --sr 24000 --text "Длинный текст ..." \
   --stream_chunk_size 3 --left_context_seconds 0.6 \

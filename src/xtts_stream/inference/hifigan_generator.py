@@ -7,7 +7,7 @@ from torch.nn import Conv1d, ConvTranspose1d
 from torch.nn import functional as F
 from torch.nn.utils.parametrizations import weight_norm
 from torch.nn.utils.parametrize import remove_parametrizations
-from xtts_stream.core.generic_utils import load_fsspec
+from xtts_stream.inference.generic_utils import load_fsspec
 
 logger = logging.getLogger(__name__)
 
