@@ -1,10 +1,13 @@
 # syntax=docker/dockerfile:1.4
-FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app/src \
+    CUDA_HOME=/usr/local/cuda \
+    PATH=/usr/local/cuda/bin:${PATH} \
     API_PORT=8000
 
 WORKDIR /app
