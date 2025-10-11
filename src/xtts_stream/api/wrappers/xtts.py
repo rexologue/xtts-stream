@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
 import os
+import re
+import json
+import asyncio
 from dataclasses import fields
 from pathlib import Path
 from typing import AsyncIterator, Optional
@@ -170,10 +171,150 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
                 continue
             yield arr
 
+    
+    _PCM_FMT_RE = re.compile(r"^pcm_(\d+)$")
+    _have_torchaudio: Optional[bool] = None
+    _have_scipy: Optional[bool] = None
+
+    @staticmethod
+    def _tpdf_dither(x: np.ndarray, lsb: float = 1.0 / 32768.0) -> np.ndarray:
+        """TPDF-дизеринг: добавляем треугольный шум ±1 LSB перед квантованием в int16."""
+        # два независимых равномерных → треугольное распределение
+        n = x.shape[-1]
+        noise = (np.random.random(n) - np.random.random(n)) * lsb
+        return x + noise.astype(np.float32, copy=False)
+
+    @classmethod
+    def _check_torchaudio(cls) -> bool:
+        if cls._have_torchaudio is None:
+            try:
+                import torchaudio  # type: ignore
+                cls._have_torchaudio = True
+            except Exception:
+                cls._have_torchaudio = False
+        return bool(cls._have_torchaudio)
+
+    @classmethod
+    def _check_scipy(cls) -> bool:
+        if cls._have_scipy is None:
+            try:
+                import scipy.signal  # type: ignore
+                cls._have_scipy = True
+            except Exception:
+                cls._have_scipy = False
+        return bool(cls._have_scipy)
+
+    @staticmethod
+    def _resample_torchaudio(x_f32: np.ndarray, src_sr: int, dst_sr: int) -> np.ndarray:
+        import torch
+        import torchaudio.functional as AF  # type: ignore
+        t = torch.from_numpy(x_f32).to(torch.float32).unsqueeze(0).unsqueeze(0)  # [1,1,N]
+        y = AF.resample(
+            t, orig_freq=src_sr, new_freq=dst_sr,
+            lowpass_filter_width=16, rolloff=0.99,
+            resampling_method="sinc_interp_kaiser", beta=14.769656459379492  # ~80 dB
+        )
+        return y.squeeze(0).squeeze(0).cpu().numpy().astype(np.float32, copy=False)
+
+    @staticmethod
+    def _resample_scipy_poly(x_f32: np.ndarray, src_sr: int, dst_sr: int) -> np.ndarray:
+        import numpy as _np
+        from math import gcd
+        from scipy.signal import resample_poly  # type: ignore
+        g = gcd(src_sr, dst_sr)
+        up = dst_sr // g
+        down = src_sr // g
+        # Kaiser beta~14 → ~80 dB подавление боковых лепестков
+        y = resample_poly(x_f32, up, down, window=("kaiser", 14.0))
+        return _np.asarray(y, dtype=_np.float32, copy=False)
+
+    @staticmethod
+    def _design_lowpass_fir(cutoff_hz: float, sr: int, taps: int = 127) -> np.ndarray:
+        """
+        Классический windowed-sinc c Blackman-окном.
+        cutoff_hz — частота среза (Гц), taps — нечётное число.
+        """
+        import numpy as _np
+        assert taps % 2 == 1, "taps must be odd"
+        nyq = sr * 0.5
+        fc = float(cutoff_hz) / nyq  # [0..1]
+        n = _np.arange(taps, dtype=_np.float64)
+        m = (taps - 1) / 2.0
+        # sinc low-pass
+        h = _np.sinc(2 * fc * (n - m))
+        # Blackman window
+        w = 0.42 - 0.5 * _np.cos(2 * _np.pi * n / (taps - 1)) + 0.08 * _np.cos(4 * _np.pi * n / (taps - 1))
+        h *= w
+        # нормировка на единичный коэффициент усиления по DC
+        h = h / _np.sum(h)
+        return h.astype(_np.float32, copy=False)
+
+    @classmethod
+    def _resample_fallback(cls, x_f32: np.ndarray, src_sr: int, dst_sr: int) -> np.ndarray:
+        """
+        Fallback: антиалиасный downsample (FIR) + линейный rate-convert.
+        Для upsample — просто линейная интерполяция.
+        """
+        import numpy as _np
+
+        x = _np.asarray(x_f32, dtype=_np.float32, copy=False)
+        if src_sr == dst_sr or x.size == 0:
+            return x
+
+        if dst_sr < src_sr:
+            # антиалиас до новой Найквистовой частоты
+            cutoff = 0.45 * dst_sr  # чуть ниже 0.5*dst_sr, чтобы оставить запас
+            taps = 127 if src_sr >= 16000 else 63
+            h = cls._design_lowpass_fir(cutoff_hz=cutoff, sr=src_sr, taps=taps)
+            # линейная свёртка (same)
+            y = _np.convolve(x, h, mode="same").astype(_np.float32, copy=False)
+        else:
+            y = x
+
+        # линейное изменение скорости дискретизации
+        n_src = y.shape[-1]
+        n_dst = max(1, int(round(n_src * (dst_sr / float(src_sr)))))
+        t_src = _np.linspace(0.0, 1.0, num=n_src, endpoint=False, dtype=_np.float64)
+        t_dst = _np.linspace(0.0, 1.0, num=n_dst, endpoint=False, dtype=_np.float64)
+        out = _np.interp(t_dst, t_src, y.astype(_np.float64, copy=False))
+        return out.astype(_np.float32, copy=False)
+    
     def encode_audio(self, frame_f32: np.ndarray, output_format: str) -> bytes:
-        frame_f32 = np.clip(frame_f32, -1.0, 1.0)
-        pcm = (frame_f32 * 32767.0).astype(np.int16)
-        if output_format == "pcm_24000":
-            return pcm.tobytes()
-        # default to PCM until additional codecs are implemented
+        """
+        Кодирует float32 [-1, 1] в PCM16 mono с ресемплингом под любой pcm_<sr>,
+        включая 8000, 16000, 22050, 24000, 44100, 48000.
+        Повторной валидации формата не делаем — app.py уже проверил.
+        """
+        # 1) подготовим моно float32 [-1..1]
+        x = np.asarray(frame_f32, dtype=np.float32)
+        if x.ndim != 1:
+            x = x.reshape(-1)
+        x = np.clip(x, -1.0, 1.0)
+
+        # 2) извлекаем целевую частоту из 'pcm_<sr>'; если не распознали — считаем равной исходной
+        m = self._PCM_FMT_RE.match(output_format.strip()) if isinstance(output_format, str) else None
+        target_sr = int(m.group(1)) if m else self.sample_rate
+
+        # 3) ресемплинг при необходимости
+        if target_sr != self.sample_rate:
+            try:
+                if self._check_torchaudio():
+                    x = self._resample_torchaudio(x, self.sample_rate, target_sr)
+                elif self._check_scipy():
+                    x = self._resample_scipy_poly(x, self.sample_rate, target_sr)
+                else:
+                    x = self._resample_fallback(x, self.sample_rate, target_sr)
+            except Exception:
+                # на случай любых неожиданных проблем — безопасный откат на fallback
+                x = self._resample_fallback(x, self.sample_rate, target_sr)
+
+            # страхующий клиппинг после ресемплинга
+            x = np.clip(x, -1.0, 1.0)
+
+        # 4) TPDF-дизеринг + квантование в PCM16 mono
+        x = self._tpdf_dither(x)  # мягкая квантзация
+        x = np.clip(x, -1.0, 1.0)
+        pcm = (x * 32767.0).astype(np.int16, copy=False)
+
         return pcm.tobytes()
+

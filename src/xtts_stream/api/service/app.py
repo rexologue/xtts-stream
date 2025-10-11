@@ -101,7 +101,7 @@ gpu_sema = asyncio.Semaphore(MAX_CONCURRENCY)
 # ======================================================================================
 
 EL_PCM_RE = re.compile(r"^pcm_(\d{4,6})$")  # e.g., pcm_24000
-ALLOWED_SR = {16000, 22050, 24000, 44100, 48000}
+ALLOWED_SR = {8000, 16000, 22050, 24000, 44100, 48000}
 PCM_BYTES_PER_SAMPLE = 2  # 16-bit PCM
 PCM_CHANNELS = 1          # mono
 DEFAULT_TARGET_LEAD_MS = 20.0
