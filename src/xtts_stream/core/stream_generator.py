@@ -138,6 +138,7 @@ class NewGenerationMixin(GenerationMixin):
         generation_config, model_kwargs = self._prepare_generation_config(
             generation_config, use_model_defaults, **kwargs
         )
+
         self._validate_model_kwargs(model_kwargs.copy())
         self._validate_assistant(assistant_model, tokenizer, assistant_tokenizer)
 
@@ -224,9 +225,20 @@ class NewGenerationMixin(GenerationMixin):
             and not self.config.is_encoder_decoder
         ):
             max_cache_length += inputs_tensor.shape[1]
-        self._prepare_cache_for_generation(
-            generation_config, model_kwargs, assistant_model, batch_size, max_cache_length, 'cuda'
+            
+        prepare_sig = inspect.signature(self._prepare_cache_for_generation)
+        kwargs_prepare = dict(
+            generation_config=generation_config,
+            model_kwargs=model_kwargs,
+            assistant_model=assistant_model,
+            batch_size=batch_size,
+            max_cache_length=max_cache_length,
         )
+
+        if 'device' in prepare_sig.parameters:
+            kwargs_prepare['device'] = input_ids.device  # или inputs_tensor.device
+
+        self._prepare_cache_for_generation(**kwargs_prepare)
 
         if self.device.type != input_ids.device.type:
             warnings.warn(

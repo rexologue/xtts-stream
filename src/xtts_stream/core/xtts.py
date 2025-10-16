@@ -19,7 +19,13 @@ from xtts_stream.core.shared_configs import BaseTTSConfig
 from xtts_stream.core.gpt import GPT
 from xtts_stream.core.hifigan_decoder import HifiDecoder
 from xtts_stream.core.stream_generator import init_stream_support
-
+from xtts_stream.core.tone import StreamingCTCPipeline
+from xtts_stream.core.tone_utils import (
+    prepare_for_tone, 
+    trim_by_seconds,
+    trim_by_seconds_torch,
+    normalize_text
+)
 
 @dataclass
 class StreamingMetrics:
@@ -41,6 +47,8 @@ logger = logging.getLogger(__name__)
 
 init_stream_support()
 
+SHORT_SEQ_THRESHOLD = 50
+SEQ_RECONSTRUCT_THRESHOLD = 1
 
 def wav_to_mel_cloning(
     wav,
@@ -152,6 +160,7 @@ class XttsArgs(Coqpit):
         gpt_code_stride_len (int, optional): The hop_size of dvae and consequently of the gpt output. Defaults to 1024.
         gpt_use_masking_gt_prompt_approach (bool, optional):  If True, it will use ground truth as prompt and it will mask the loss to avoid repetition. Defaults to True.
         gpt_use_perceiver_resampler (bool, optional):  If True, it will use perceiver resampler from flamingo paper - https://arxiv.org/abs/2204.14198. Defaults to False.
+        asr (bool, optional):  If True, applies ASR model for cutting audio of short sequences. Defaults to False.
     """
 
     gpt_batch_size: int = 1
@@ -194,6 +203,9 @@ class XttsArgs(Coqpit):
     xtts_checkpoint: str = "model.pth"
     vocoder: str = ""
 
+    # ASR
+    asr: bool = False
+
 
 class Xtts(BaseTTS):
     """XTTS model implementation.
@@ -219,6 +231,12 @@ class Xtts(BaseTTS):
         self.gpt = None
         self.init_models()
         self.register_buffer("mel_stats", torch.ones(80))
+
+        if config.model_args.asr:
+            self.asr_model = StreamingCTCPipeline.from_hugging_face()
+
+        else:
+            self.asr_model = None
 
     def init_models(self):
         """Initialize the models. We do it here since we need to load the tokenizer first."""
@@ -549,6 +567,7 @@ class Xtts(BaseTTS):
         num_beams: int = 1,
         speed: float = 1.0,
         enable_text_splitting: bool = False,
+        apply_asr: bool = False,
         **hf_generate_kwargs: Any,
     ):
         """
@@ -589,14 +608,23 @@ class Xtts(BaseTTS):
         length_scale = 1.0 / max(speed, 0.05)
         gpt_cond_latent = gpt_cond_latent.to(self.device)
         speaker_embedding = speaker_embedding.to(self.device)
+
+        if apply_asr:
+            if self.asr_model is None:
+                raise ValueError("For using ASR load intialize XTTS model with asr=True")
+            
+            if len(text) > SHORT_SEQ_THRESHOLD:
+                apply_asr = False
+
         if enable_text_splitting:
-            text = split_sentence(text, language, self.tokenizer.char_limits[language])
+            text_list = split_sentence(text, language, self.tokenizer.char_limits[language])
         else:
-            text = [text]
+            text_list = [text]
 
         wavs = []
         gpt_latents_list = []
-        for sent in text:
+
+        for sent in text_list:
             sent = sent.strip().lower()
             text_tokens = torch.IntTensor(self.tokenizer.encode(sent, lang=language)).unsqueeze(0).to(self.device)
 
@@ -643,8 +671,31 @@ class Xtts(BaseTTS):
                 gpt_latents_list.append(gpt_latents.cpu())
                 wavs.append(self.hifigan_decoder(gpt_latents, g=speaker_embedding).cpu().squeeze())
 
+        final_wav = torch.cat(wavs, dim=0).numpy()
+
+        if apply_asr:
+            input_text_len = len(normalize_text(text))
+            asr_text = ""
+
+            phrases = self.asr_model.forward_offline(prepare_for_tone(final_wav, sr=24000))
+
+            for phrase in phrases:
+                asr_text += phrase.text
+
+                if input_text_len <= len(asr_text):
+                    final_wav = trim_by_seconds(
+                        final_wav,
+                        sr=24000,
+                        t_end=(phrase.end_time + 0.01),
+                    )
+                    break
+
+                else:
+                    asr_text += " "
+                    continue
+
         return {
-            "wav": torch.cat(wavs, dim=0).numpy(),
+            "wav": final_wav,
             "gpt_latents": torch.cat(gpt_latents_list, dim=1).numpy(),
             "speaker_embedding": speaker_embedding,
         }
@@ -680,6 +731,7 @@ class Xtts(BaseTTS):
         gpt_cond_latent,
         speaker_embedding,
         apply_denoise: bool = True,
+        apply_asr: bool = False,
         # Streaming
         stream_chunk_size=20,
         overlap_wav_len=1024,
@@ -710,10 +762,18 @@ class Xtts(BaseTTS):
         time_to_first_audio: float | None = None
         generated_audio_samples = 0
 
+        if apply_asr:
+            if len(text) > SHORT_SEQ_THRESHOLD:
+                apply_asr = False
+            else:
+                asr_text = ""
+                input_text_len = SEQ_RECONSTRUCT_THRESHOLD * len(normalize_text(text))
+                left_context_tokens = None
+
         if enable_text_splitting:
-            text = split_sentence(text, language, self.tokenizer.char_limits[language])
+            text_list = split_sentence(text, language, self.tokenizer.char_limits[language])
         else:
-            text = [text]
+            text_list = [text]
 
         # параметры для пересчёта «токены -> сэмплы» в аудио (учитываем speed через length_scale)
         sr_in = 22050
@@ -728,7 +788,7 @@ class Xtts(BaseTTS):
         # флаг режима «обрезаем до контекста»
         trim_to_context = bool(left_context_tokens and left_context_tokens > 0)
 
-        for sent in text:
+        for sent in text_list:
             sent = sent.strip().lower()
             text_tokens = torch.IntTensor(self.tokenizer.encode(sent, lang=language)).unsqueeze(0).to(self.device)
 
@@ -777,10 +837,13 @@ class Xtts(BaseTTS):
             while not is_end:
                 try:
                     x, latent = next(gpt_generator)
+
                     if time_to_first_token is None:
                         time_to_first_token = time.perf_counter() - start_time
+
                     last_tokens += [x]
                     all_latents += [latent]
+
                 except StopIteration:
                     is_end = True
 
@@ -822,6 +885,32 @@ class Xtts(BaseTTS):
                             chunk_count += 1
 
                         last_tokens = []
+
+                        if apply_asr:
+                            asr_wav = processed_wav_chunk.detach().cpu().numpy()
+                            phrases = self.asr_model.forward_offline(prepare_for_tone(asr_wav, sr=24000))
+
+                            if len(phrases) == 0:
+                                break
+
+                            for phrase in phrases:
+                                asr_text += phrase.text
+
+                                if input_text_len <= len(asr_text):
+                                    is_end = True
+
+                                    processed_wav_chunk = trim_by_seconds_torch(
+                                        processed_wav_chunk,
+                                        sr=24000,
+                                        t_end=(phrase.end_time - 0.05),
+                                    )
+
+                                    break
+
+                                else:
+                                    asr_text += " "
+                                    continue
+
                         yield processed_wav_chunk
                         continue
 

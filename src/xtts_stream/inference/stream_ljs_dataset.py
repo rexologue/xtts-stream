@@ -41,8 +41,9 @@ def load_config(config_path: Path) -> XttsConfig:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Stream XTTS synthesis for an LJSpeech dataset")
-    parser.add_argument("dataset", type=Path, help="Path to LJSpeech-style dataset directory")
+    parser.add_argument("metadata", type=Path, help="Path to LJSpeech-style metadata")
     parser.add_argument("--config", type=Path, required=True, help="Path to XTTS config.json")
+    parser.add_argument("--ref", type=Path, required=True, help="Path to reference audio")
     parser.add_argument("--checkpoint", type=Path, required=True, help="Path to XTTS checkpoint (model.pth)")
     parser.add_argument("--tokenizer", type=Path, help="Path to vocab.json. Defaults to config directory")
     parser.add_argument("--speakers", type=Path, help="Optional speaker embedding archive")
@@ -60,6 +61,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stream-overlap", type=int, default=512, help="Sample overlap for crossfade")
     parser.add_argument("--stream-ctx-seconds", type=int, default=None, help="Optional left context in seconds")
     parser.add_argument("--accent", action="store_true", help="Enable RUAccent for auto-accentizing text")
+    parser.add_argument("--asr", action="store_true", help="Enable RUAccent for auto-accentizing text")
     parser.add_argument("--output", type=Path, required=True, help="Directory to store generated results")
     return parser.parse_args()
 
@@ -149,9 +151,8 @@ def write_results_csv(destination: Path, sample_results: Iterable[SampleResult])
 def main() -> None:
     args = parse_args()
 
-    dataset_dir = args.dataset
-    metadata_path = dataset_dir / "metadata.csv"
-    reference_wav = dataset_dir / "ref" / "ref.wav"
+    metadata_path = args.metadata
+    reference_wav = args.ref
 
     if not metadata_path.is_file():
         raise FileNotFoundError(f"metadata.csv not found at {metadata_path}")
@@ -211,6 +212,7 @@ def main() -> None:
         "repetition_penalty": config.repetition_penalty,
         "speed": args.speed,
         "enable_text_splitting": args.split_text,
+        "apply_asr": args.asr
     }
 
     sample_rate = config.model_args.output_sample_rate

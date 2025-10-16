@@ -24,14 +24,19 @@ def _filter_kwargs(cls, data: dict) -> dict:
 def load_config(config_path: Path) -> XttsConfig:
     with open(config_path, "r", encoding="utf-8") as f:
         raw = json.load(f)
+
     model_args = raw.get("model_args", {})
     audio_args = raw.get("audio", {})
     config_kwargs = _filter_kwargs(XttsConfig, raw)
+
     config = XttsConfig(**config_kwargs)
+    
     if isinstance(model_args, dict):
         config.model_args = XttsArgs(**_filter_kwargs(XttsArgs, model_args))
+
     if isinstance(audio_args, dict):
         config.audio = XttsAudioConfig(**_filter_kwargs(XttsAudioConfig, audio_args))
+
     return config
 
 
@@ -54,6 +59,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repetition_penalty", type=float, default=None)
     parser.add_argument("--speed", type=float, default=1.0)
     parser.add_argument("--split-text", action="store_true", help="Enable automatic sentence splitting")
+    parser.add_argument("--asr", action="store_true", help="Enable ASR module to improve work on short sequances")
     parser.add_argument("--stream", action="store_true", help="Enable streaming synthesis")
     parser.add_argument(
         "--stream-chunk-size",
@@ -91,6 +97,7 @@ def main() -> None:
         config.length_penalty = args.length_penalty
     if args.repetition_penalty is not None:
         config.repetition_penalty = args.repetition_penalty
+    
 
     model = Xtts.init_from_config(config)
     model.load_checkpoint(
@@ -115,6 +122,7 @@ def main() -> None:
         "repetition_penalty": config.repetition_penalty,
         "speed": args.speed,
         "enable_text_splitting": args.split_text,
+        "apply_asr": args.asr
     }
 
     if args.stream:
