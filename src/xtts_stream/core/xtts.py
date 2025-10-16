@@ -232,12 +232,6 @@ class Xtts(BaseTTS):
         self.init_models()
         self.register_buffer("mel_stats", torch.ones(80))
 
-        if config.model_args.asr:
-            self.asr_model = StreamingCTCPipeline.from_hugging_face()
-
-        else:
-            self.asr_model = None
-
     def init_models(self):
         """Initialize the models. We do it here since we need to load the tokenizer first."""
         if self.tokenizer.tokenizer is not None:
@@ -272,6 +266,12 @@ class Xtts(BaseTTS):
             d_vector_dim=self.args.d_vector_dim,
             cond_d_vector_in_each_upsampling_layer=self.args.cond_d_vector_in_each_upsampling_layer,
         )
+
+        if self.config.model_args.asr:
+            self.asr_model = StreamingCTCPipeline.from_hugging_face()
+            self.asr_state = None
+        else:
+            self.asr_model = None
 
     def _apply_high_pass_filter(self, wav_chunk_numpy, cutoff=75, order=5):
         sample_rate = 24_000
@@ -895,6 +895,7 @@ class Xtts(BaseTTS):
 
                             for phrase in phrases:
                                 asr_text += phrase.text
+                                print(asr_text)
 
                                 if input_text_len <= len(asr_text):
                                     is_end = True
