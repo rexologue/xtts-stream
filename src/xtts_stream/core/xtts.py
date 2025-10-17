@@ -23,7 +23,6 @@ from xtts_stream.core.tone import StreamingCTCPipeline
 from xtts_stream.core.tone_utils import (
     prepare_for_tone, 
     trim_by_seconds,
-    trim_by_seconds_torch,
     normalize_text
 )
 
@@ -48,7 +47,7 @@ logger = logging.getLogger(__name__)
 init_stream_support()
 
 SHORT_SEQ_THRESHOLD = 50
-SEQ_RECONSTRUCT_THRESHOLD = 1
+SEQ_RECONSTRUCT_THRESHOLD = 0.8
 
 def wav_to_mel_cloning(
     wav,
@@ -749,7 +748,7 @@ class Xtts(BaseTTS):
         enable_text_splitting=False,
         **hf_generate_kwargs,
     ):
-        language = language.split("-")[0]  # remove the country code
+        language = language.split("-")[0]
         length_scale = 1.0 / max(speed, 0.05)
         gpt_cond_latent = gpt_cond_latent.to(self.device)
         speaker_embedding = speaker_embedding.to(self.device)
@@ -762,31 +761,41 @@ class Xtts(BaseTTS):
         time_to_first_audio: float | None = None
         generated_audio_samples = 0
 
-        if apply_asr:
-            if len(text) > SHORT_SEQ_THRESHOLD:
-                apply_asr = False
-            else:
-                asr_text = ""
-                input_text_len = SEQ_RECONSTRUCT_THRESHOLD * len(normalize_text(text))
-                left_context_tokens = None
-
-        if enable_text_splitting:
-            text_list = split_sentence(text, language, self.tokenizer.char_limits[language])
-        else:
-            text_list = [text]
-
-        # параметры для пересчёта «токены -> сэмплы» в аудио (учитываем speed через length_scale)
+        # параметры «токены -> сэмплы»
         sr_in = 22050
         sr_out = getattr(self.args, "output_sample_rate", 24000)
-        tokens_per_second = sr_in / float(self.args.gpt_code_stride_len)        # ≈ 21.53 токенов/с
-        samples_per_token_out = sr_out * (self.args.gpt_code_stride_len / sr_in) * length_scale  # ≈ 1114 * length_scale сэмплов/токен
+        tokens_per_second = sr_in / float(self.args.gpt_code_stride_len)
+        samples_per_token_out = sr_out * (self.args.gpt_code_stride_len / sr_in) * length_scale
 
         # если секунды заданы, переводим в токены
         if left_context_seconds is not None and (left_context_tokens is None or left_context_tokens <= 0):
             left_context_tokens = max(0, int(round(left_context_seconds * tokens_per_second)))
 
-        # флаг режима «обрезаем до контекста»
         trim_to_context = bool(left_context_tokens and left_context_tokens > 0)
+
+        # готовим пороги и стэйт
+        asr_enabled = bool(apply_asr and len(text) <= SHORT_SEQ_THRESHOLD and hasattr(self, "asr_model") and self.asr_model is not None)
+        if asr_enabled:
+            target_norm = normalize_text(text)
+            input_text_len = int(SEQ_RECONSTRUCT_THRESHOLD * len(target_norm))
+            asr_chunk_samples = int(getattr(self.asr_model, "CHUNK_SIZE", 2400))  # 2400 = 100мс при 24 кГц
+            asr_buffer = np.empty(0, dtype=np.int32)
+            asr_streaming_state = None
+            asr_chars_seen = 0
+            emitted_samples_total = 0
+            trim_to_context = False
+
+            # локальные таймкоды -> переводим в абсолют через смещение чанка
+            asr_chunks_sent = 0
+            chunk_sec = asr_chunk_samples / float(sr_out)
+
+            while len(text) <= SHORT_SEQ_THRESHOLD:
+                text += (" " + text)
+
+        if enable_text_splitting:
+            text_list = split_sentence(text, language, self.tokenizer.char_limits[language])
+        else:
+            text_list = [text]
 
         for sent in text_list:
             sent = sent.strip().lower()
@@ -796,11 +805,11 @@ class Xtts(BaseTTS):
                 " ❗ XTTS can only generate text with a maximum of 400 tokens."
             )
 
-            fake_inputs = self.gpt.compute_embeddings( # type: ignore
+            fake_inputs = self.gpt.compute_embeddings(  # type: ignore
                 gpt_cond_latent.to(self.device),
                 text_tokens,
-            ) 
-            gpt_generator = self.gpt.get_generator( # type: ignore
+            )
+            gpt_generator = self.gpt.get_generator(  # type: ignore
                 fake_inputs=fake_inputs,
                 top_k=top_k,
                 top_p=top_p,
@@ -823,12 +832,10 @@ class Xtts(BaseTTS):
             is_end = False
 
             if not trim_to_context:
-                # НЕ меняем поведение: окна по исходному overlap_wav_len
                 win = torch.hann_window(2 * overlap_wav_len, periodic=False, device=self.device, dtype=torch.float32)
                 fade_in, fade_out = win[:overlap_wav_len], win[overlap_wav_len:]
                 overlap_len = overlap_wav_len
             else:
-                # В режиме обрезки выравниваем overlap по hop
                 hop = getattr(self.args, "output_hop_length", 256)
                 overlap_len = max(hop, (overlap_wav_len // hop) * hop)
                 win = torch.hann_window(2 * overlap_len, periodic=False, device=self.device, dtype=torch.float32)
@@ -841,15 +848,14 @@ class Xtts(BaseTTS):
                     if time_to_first_token is None:
                         time_to_first_token = time.perf_counter() - start_time
 
-                    last_tokens += [x]
-                    all_latents += [latent]
-
+                    last_tokens.append(x)
+                    all_latents.append(latent)
                 except StopIteration:
                     is_end = True
 
                 if is_end or (stream_chunk_size > 0 and len(last_tokens) >= stream_chunk_size):
                     if not trim_to_context:
-                        # ---- Прежний кумулятивный путь: декодим всю историю ----
+                        # ---- Кумулятивный путь ----
                         gpt_latents = torch.cat(all_latents, dim=0)[None, :]
                         if length_scale != 1.0:
                             gpt_latents = F.interpolate(
@@ -861,57 +867,73 @@ class Xtts(BaseTTS):
                             wav_gen.squeeze(), wav_gen_prev, wav_overlap, fade_in, fade_out
                         )
 
+                        # шумодав только на отдаваемом куске
                         if wav_chunk is not None and wav_chunk.numel() > 0 and apply_denoise:
-                            wav_chunk_numpy = wav_chunk.cpu().numpy()
-                            # оставляем поведение как было (шумодав только для отдаваемого чанка)
-                            wav_chunk_numpy = self._apply_noise_reduction(wav_chunk_numpy)
-                            processed_wav_chunk = torch.from_numpy(wav_chunk_numpy.copy()).to(self.device).float()
+                            wav_np = wav_chunk.detach().cpu().numpy()
+                            wav_np = self._apply_noise_reduction(wav_np)
+                            processed_wav_chunk = torch.from_numpy(wav_np.copy()).to(self.device).float()
                         else:
                             processed_wav_chunk = wav_chunk
 
-                        if (
-                            processed_wav_chunk is not None
-                            and processed_wav_chunk.numel() > 0
-                            and time_to_first_audio is None
-                        ):
-                            time_to_first_audio = time.perf_counter() - start_time
+                        # метрики: первая аудио-отдача
                         if processed_wav_chunk is not None and processed_wav_chunk.numel() > 0:
-                            generated_audio_samples += processed_wav_chunk.numel()
+                            if time_to_first_audio is None:
+                                time_to_first_audio = time.perf_counter() - start_time
 
+                        # ====== ВСТРОЕННЫЙ СТРИМ-ASR  ======
+                        if asr_enabled and processed_wav_chunk is not None and processed_wav_chunk.numel() > 0:
+                            SAFETY_TAIL = 0.2  # секунды
+
+                            # Накапливаем int32 PCM, остаток < CHUNK_SIZE оставляем — «приклеится» к следующему чанку
+                            pcm = prepare_for_tone(processed_wav_chunk.detach().cpu().numpy(), sr=sr_out)
+                            asr_buffer = np.concatenate([asr_buffer, pcm])
+
+                            # Кормим строго по CHUNK_SIZE
+                            while asr_buffer.shape[0] >= asr_chunk_samples and not is_end:
+                                feed = asr_buffer[:asr_chunk_samples]
+                                asr_buffer = asr_buffer[asr_chunk_samples:]
+
+                                # локальный старт текущего чанка в секундах от начала стрима
+                                chunk_start_sec = asr_chunks_sent * chunk_sec
+                                new_phrases, asr_streaming_state = self.asr_model.forward(feed, asr_streaming_state)
+                                asr_chunks_sent += 1
+
+                                if new_phrases:
+                                    for p in new_phrases:
+                                        t_norm = normalize_text(getattr(p, "text", ""))
+                                        if t_norm:
+                                            # считаем символы так же, как у вас (без выкидывания пробелов)
+                                            asr_chars_seen += len(t_norm)
+
+                                            if asr_chars_seen >= input_text_len:
+                                                # локальный -> абсолютный, плюс запас 0.2с
+                                                local_end = float(getattr(p, "end_time", 0.0) or 0.0)
+                                                end_abs_sec = chunk_start_sec + local_end + SAFETY_TAIL
+
+                                                keep_samples = int(round(end_abs_sec * sr_out)) - emitted_samples_total
+                                                keep_samples = max(0, min(keep_samples, processed_wav_chunk.numel()))
+
+                                                if keep_samples < processed_wav_chunk.numel():
+                                                    processed_wav_chunk = processed_wav_chunk[:keep_samples]
+
+                                                is_end = True
+                                                break
+
+                        # учёт метрик (после возможного решения об остановке, но без подрезки чанка)
                         if processed_wav_chunk is not None and processed_wav_chunk.numel() > 0:
                             now = time.perf_counter()
                             chunk_generation_time_total += now - last_chunk_time
                             last_chunk_time = now
                             chunk_count += 1
+                            generated_audio_samples += processed_wav_chunk.numel()
+
+                        # отдаём наружу
+                        if processed_wav_chunk is not None and processed_wav_chunk.numel() > 0:
+                            yield processed_wav_chunk
+                            if asr_enabled:
+                                emitted_samples_total += processed_wav_chunk.numel()
 
                         last_tokens = []
-
-                        if apply_asr:
-                            asr_wav = processed_wav_chunk.detach().cpu().numpy()
-                            phrases = self.asr_model.forward_offline(prepare_for_tone(asr_wav, sr=24000))
-
-                            if len(phrases) == 0:
-                                break
-
-                            for phrase in phrases:
-                                asr_text += phrase.text
-
-                                if input_text_len <= len(asr_text):
-                                    is_end = True
-
-                                    processed_wav_chunk = trim_by_seconds_torch(
-                                        processed_wav_chunk,
-                                        sr=24000,
-                                        t_end=(phrase.end_time - 0.05),
-                                    )
-
-                                    break
-
-                                else:
-                                    asr_text += " "
-                                    continue
-
-                        yield processed_wav_chunk
                         continue
 
                     # ---- Путь усечения истории до небольшого контекста ----
