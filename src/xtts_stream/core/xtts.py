@@ -4,6 +4,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+import multiprocessing
+import queue
+from queue import Empty
 
 import librosa
 import torch
@@ -42,6 +45,8 @@ from xtts_stream.core.generic_utils import (
     warn_synthesize_config_deprecated,
     warn_synthesize_speaker_id_deprecated,
 )
+
+from xtts_stream.core.asr_worker import ASRWorker, CLOSE, FLUSH
 
 logger = logging.getLogger(__name__)
 
@@ -268,10 +273,13 @@ class Xtts(BaseTTS):
         )
 
         if self.config.model_args.asr:
-            self.asr_model = StreamingCTCPipeline.from_hugging_face()
-            self.asr_state = None
+            self._start_asr_worker()
+
         else:
-            self.asr_model = None
+            self.asr_worker = None
+            self.asr_worker_proc = None
+            self.audio_queue = None
+            self.asr_result_queue = None
 
     def _apply_high_pass_filter(self, wav_chunk_numpy, cutoff=75, order=5):
         sample_rate = 24_000
@@ -297,6 +305,34 @@ class Xtts(BaseTTS):
             reduced_noise_chunk = wav_chunk_numpy
         
         return reduced_noise_chunk
+    
+    def _start_asr_worker(self):
+        if getattr(self, "asr_worker_proc", None) and self.asr_worker_proc.is_alive():
+            return
+        self.audio_queue = multiprocessing.Queue(maxsize=64)
+        self.asr_result_queue = multiprocessing.Queue(maxsize=64)
+        self.asr_worker = ASRWorker(self.audio_queue, self.asr_result_queue, chunk_size=2400)
+        self.asr_worker_proc = multiprocessing.Process(target=self.asr_worker.run, daemon=True)
+        self.asr_worker_proc.start()
+
+    def _stop_asr_worker(self, force: bool = False):
+        if getattr(self, "audio_queue", None) is None:
+            return
+        
+        try:
+            self.audio_queue.put(CLOSE)  # None
+        except Exception:
+            pass
+
+        if getattr(self, "asr_worker_proc", None):
+            self.asr_worker_proc.join(timeout=5)
+            if self.asr_worker_proc.is_alive() or force:
+                self.asr_worker_proc.terminate()
+
+        self.asr_worker_proc = None
+        self.asr_worker = None
+        self.audio_queue = None
+        self.asr_result_queue = None
     
     @torch.inference_mode()
     def get_gpt_cond_latents(self, audio, sr, length: int = 30, chunk_length: int = 6):
@@ -610,7 +646,7 @@ class Xtts(BaseTTS):
         speaker_embedding = speaker_embedding.to(self.device)
 
         if apply_asr:
-            if self.asr_model is None:
+            if self.asr_worker is None:
                 raise ValueError("For using ASR load intialize XTTS model with asr=True")
             
             if len(text) > SHORT_SEQ_THRESHOLD:
@@ -674,25 +710,38 @@ class Xtts(BaseTTS):
         final_wav = torch.cat(wavs, dim=0).numpy()
 
         if apply_asr:
-            input_text_len = len(normalize_text(text))
-            asr_text = ""
+            # готовим и отправляем
+            asr_pcm = prepare_for_tone(final_wav, sr=24000)  # numpy int32
+            self.audio_queue.put(asr_pcm)
+            self.audio_queue.put(FLUSH)  # финализировать текущую фразу, сбросить state
 
-            phrases = self.asr_model.forward_offline(prepare_for_tone(final_wav, sr=24000))
-
-            for phrase in phrases:
-                asr_text += phrase.text
-
-                if input_text_len <= len(asr_text):
-                    final_wav = trim_by_seconds(
-                        final_wav,
-                        sr=24000,
-                        t_end=(phrase.end_time + 0.01),
-                    )
+            # читаем всё, что накопилось
+            phrases = []
+            # подождём чуть-чуть, чтобы воркер успел отработать
+            t0 = time.perf_counter()
+            while time.perf_counter() - t0 < 1.0:  # до ~1 секунды
+                try:
+                    payload = self.asr_result_queue.get_nowait()  # это list[dict]
+                    phrases.extend(payload)
+                except Empty:
                     break
 
-                else:
-                    asr_text += " "
-                    continue
+            # восстанавливаем текст и находим конец
+            recognized_text = []
+            cutoff_time = None
+            target_len = len(normalize_text(text)) * SEQ_RECONSTRUCT_THRESHOLD
+            acc_len = 0
+            for ph in phrases:
+                t = normalize_text(ph["text"])
+                if t:
+                    recognized_text.append(t)
+                    acc_len += len(t) + 1  # пробел
+                    if acc_len >= target_len and ph.get("end_time") is not None:
+                        cutoff_time = ph["end_time"]
+                        break
+
+            if cutoff_time is not None:
+                final_wav = trim_by_seconds(final_wav, sr=24000, t_end=cutoff_time + 0.01)
 
         return {
             "wav": final_wav,
@@ -763,11 +812,15 @@ class Xtts(BaseTTS):
         generated_audio_samples = 0
 
         if apply_asr:
+            if self.asr_worker is None:
+                raise ValueError("For using ASR load intialize XTTS model with asr=True")
+    
             if len(text) > SHORT_SEQ_THRESHOLD:
                 apply_asr = False
             else:
-                asr_text = ""
-                input_text_len = SEQ_RECONSTRUCT_THRESHOLD * len(normalize_text(text))
+                _target_norm = normalize_text(text)
+                input_text_len = SEQ_RECONSTRUCT_THRESHOLD * len(_target_norm.replace(" ", ""))
+                asr_chars_seen = 0
                 left_context_tokens = None
 
         if enable_text_splitting:
@@ -886,33 +939,34 @@ class Xtts(BaseTTS):
 
                         last_tokens = []
 
-                        if apply_asr:
-                            asr_wav = processed_wav_chunk.detach().cpu().numpy()
-                            phrases = self.asr_model.forward_offline(prepare_for_tone(asr_wav, sr=24000))
+                        if apply_asr and processed_wav_chunk is not None and processed_wav_chunk.numel() > 0:
+                            self.audio_queue.put(prepare_for_tone(processed_wav_chunk.detach().cpu().numpy(), sr=24000))
+                            try:
+                                while True:
+                                    payload = self.asr_result_queue.get_nowait()  # ожидается list[dict]
+                                    for ph in payload:
+                                        t_norm = normalize_text(ph.get("text", ""))
+                                        # накапливаем количество символов БЕЗ пробелов
+                                        if t_norm:
+                                            asr_chars_seen += len(t_norm.replace(" ", ""))
+                                            if asr_chars_seen >= input_text_len:
+                                                is_end = True
+                                                break
+                                    if is_end:
+                                        break
+                            except Empty:
+                                pass
+                            if is_end:
+                                # Завершаем текущую фразу в воркере, но процесс не убиваем
+                                try:
+                                    self.audio_queue.put(FLUSH)
+                                except Exception:
+                                    pass
 
-                            if len(phrases) == 0:
-                                break
+                        # Отдаём наружу
+                        if processed_wav_chunk is not None and processed_wav_chunk.numel() > 0:
+                            yield processed_wav_chunk
 
-                            for phrase in phrases:
-                                asr_text += phrase.text
-                                print(asr_text)
-
-                                if input_text_len <= len(asr_text):
-                                    is_end = True
-
-                                    processed_wav_chunk = trim_by_seconds_torch(
-                                        processed_wav_chunk,
-                                        sr=24000,
-                                        t_end=(phrase.end_time - 0.05),
-                                    )
-
-                                    break
-
-                                else:
-                                    asr_text += " "
-                                    continue
-
-                        yield processed_wav_chunk
                         continue
 
                     # ---- Путь усечения истории до небольшого контекста ----

@@ -92,15 +92,9 @@ def trim_by_seconds_torch(wav: torch.Tensor, sr: int, t_end: float) -> torch.Ten
     return wav[..., :n]
 
 def normalize_text(text: str) -> str:
-    """
-    Удаляет всю пунктуацию (Unicode category 'P*'), приводит к lowercase,
-    заменяет пунктуацию на пробел и схлопывает повторные пробелы.
-    """
-    chars = []
-    for ch in text:
-        if unicodedata.category(ch).startswith('P'):
-            chars.append(' ')
-        else:
-            chars.append(ch.lower())
-    s = ''.join(chars)
-    return re.sub(r'\s+', ' ', s).strip()
+    lower_text = text.lower()
+    cyrillic_only = re.sub(r'[^а-яё ]', '', lower_text)
+    single_spaced = re.sub(r'\s+', ' ', cyrillic_only)
+    cleaned_text = single_spaced.strip()
+
+    return cleaned_text
