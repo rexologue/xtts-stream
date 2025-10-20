@@ -761,7 +761,7 @@ class Xtts(BaseTTS):
         time_to_first_audio: float | None = None
         generated_audio_samples = 0
 
-        # параметры «токены -> сэмплы»
+        # частоты и перевод «токены -> сэмплы»
         sr_in = 22050
         sr_out = getattr(self.args, "output_sample_rate", 24000)
         tokens_per_second = sr_in / float(self.args.gpt_code_stride_len)
@@ -770,25 +770,26 @@ class Xtts(BaseTTS):
         # если секунды заданы, переводим в токены
         if left_context_seconds is not None and (left_context_tokens is None or left_context_tokens <= 0):
             left_context_tokens = max(0, int(round(left_context_seconds * tokens_per_second)))
-
         trim_to_context = bool(left_context_tokens and left_context_tokens > 0)
 
-        # готовим пороги и стэйт
-        asr_enabled = bool(apply_asr and len(text) <= SHORT_SEQ_THRESHOLD and hasattr(self, "asr_model") and self.asr_model is not None)
+        # ====== ВСТРОЕННЫЙ СТРИМ-ASR (tone) ======
+        asr_enabled = bool(
+            apply_asr
+            and len(text) <= SHORT_SEQ_THRESHOLD
+            and hasattr(self, "asr_model")
+            and self.asr_model is not None
+        )
         if asr_enabled:
             target_norm = normalize_text(text)
             input_text_len = int(SEQ_RECONSTRUCT_THRESHOLD * len(target_norm))
-            asr_chunk_samples = int(getattr(self.asr_model, "CHUNK_SIZE", 2400))  # 2400 = 100мс при 24 кГц
+            asr_chunk_samples = int(getattr(self.asr_model, "CHUNK_SIZE", 2400))  # 2400 @ 8kHz = 0.3s
             asr_buffer = np.empty(0, dtype=np.int32)
             asr_streaming_state = None
             asr_chars_seen = 0
-            emitted_samples_total = 0
-            trim_to_context = False
+            emitted_samples_total = 0  # считаем отданные наружу сэмплы в sr_out для корректной обрезки
+            trim_to_context = False  # при активном ASR — не используем усечение контекста
 
-            # локальные таймкоды -> переводим в абсолют через смещение чанка
-            asr_chunks_sent = 0
-            chunk_sec = asr_chunk_samples / float(sr_out)
-
+            # Для совсем коротких реплик удлиним вход (поможет детекции окончания)
             while len(text) <= SHORT_SEQ_THRESHOLD:
                 text += (" " + text)
 
@@ -800,10 +801,7 @@ class Xtts(BaseTTS):
         for sent in text_list:
             sent = sent.strip().lower()
             text_tokens = torch.IntTensor(self.tokenizer.encode(sent, lang=language)).unsqueeze(0).to(self.device)
-
-            assert text_tokens.shape[-1] < self.args.gpt_max_text_tokens, (
-                " ❗ XTTS can only generate text with a maximum of 400 tokens."
-            )
+            assert text_tokens.shape[-1] < self.args.gpt_max_text_tokens, " ❗ XTTS can only generate text with a maximum of 400 tokens."
 
             fake_inputs = self.gpt.compute_embeddings(  # type: ignore
                 gpt_cond_latent.to(self.device),
@@ -825,12 +823,13 @@ class Xtts(BaseTTS):
                 **hf_generate_kwargs,
             )
 
-            last_tokens = []
-            all_latents = []
+            last_tokens: list = []
+            all_latents: list[torch.Tensor] = []
             wav_gen_prev = None
             wav_overlap = None
             is_end = False
 
+            # Фейдеры
             if not trim_to_context:
                 win = torch.hann_window(2 * overlap_wav_len, periodic=False, device=self.device, dtype=torch.float32)
                 fade_in, fade_out = win[:overlap_wav_len], win[overlap_wav_len:]
@@ -844,10 +843,8 @@ class Xtts(BaseTTS):
             while not is_end:
                 try:
                     x, latent = next(gpt_generator)
-
                     if time_to_first_token is None:
                         time_to_first_token = time.perf_counter() - start_time
-
                     last_tokens.append(x)
                     all_latents.append(latent)
                 except StopIteration:
@@ -858,9 +855,7 @@ class Xtts(BaseTTS):
                         # ---- Кумулятивный путь ----
                         gpt_latents = torch.cat(all_latents, dim=0)[None, :]
                         if length_scale != 1.0:
-                            gpt_latents = F.interpolate(
-                                gpt_latents.transpose(1, 2), scale_factor=length_scale, mode="linear"
-                            ).transpose(1, 2)
+                            gpt_latents = F.interpolate(gpt_latents.transpose(1, 2), scale_factor=length_scale, mode="linear").transpose(1, 2)
 
                         wav_gen = self.hifigan_decoder(gpt_latents, g=speaker_embedding)  # [1, S]
                         wav_chunk, wav_gen_prev, wav_overlap = self.handle_chunks(
@@ -875,51 +870,47 @@ class Xtts(BaseTTS):
                         else:
                             processed_wav_chunk = wav_chunk
 
-                        # метрики: первая аудио-отдача
-                        if processed_wav_chunk is not None and processed_wav_chunk.numel() > 0:
-                            if time_to_first_audio is None:
-                                time_to_first_audio = time.perf_counter() - start_time
+                        # метрика TTFA
+                        if processed_wav_chunk is not None and processed_wav_chunk.numel() > 0 and time_to_first_audio is None:
+                            time_to_first_audio = time.perf_counter() - start_time
 
-                        # ====== ВСТРОЕННЫЙ СТРИМ-ASR  ======
+                        # ====== ASR-обрезка по tone (секунды — ГЛОБАЛЬНЫЕ) ======
                         if asr_enabled and processed_wav_chunk is not None and processed_wav_chunk.numel() > 0:
-                            SAFETY_TAIL = 0.2  # секунды
-
-                            # Накапливаем int32 PCM, остаток < CHUNK_SIZE оставляем — «приклеится» к следующему чанку
+                            SAFETY_TAIL = 0.2  # seconds
+                            # Подготовка int32 PCM @ 8kHz для tone
                             pcm = prepare_for_tone(processed_wav_chunk.detach().cpu().numpy(), sr=sr_out)
                             asr_buffer = np.concatenate([asr_buffer, pcm])
 
-                            # Кормим строго по CHUNK_SIZE
+                            # Кормим строго по CHUNK_SIZE (2400 @ 8kHz)
                             while asr_buffer.shape[0] >= asr_chunk_samples and not is_end:
                                 feed = asr_buffer[:asr_chunk_samples]
                                 asr_buffer = asr_buffer[asr_chunk_samples:]
 
-                                # локальный старт текущего чанка в секундах от начала стрима
-                                chunk_start_sec = asr_chunks_sent * chunk_sec
                                 new_phrases, asr_streaming_state = self.asr_model.forward(feed, asr_streaming_state)
-                                asr_chunks_sent += 1
-
                                 if new_phrases:
                                     for p in new_phrases:
+                                        # Нормализуем и считаем символы один-в-один с target_norm (без удаления пробелов)
                                         t_norm = normalize_text(getattr(p, "text", ""))
-                                        if t_norm:
-                                            # считаем символы так же, как у вас (без выкидывания пробелов)
-                                            asr_chars_seen += len(t_norm)
+                                        if not t_norm:
+                                            continue
+                                        asr_chars_seen += len(t_norm)
 
-                                            if asr_chars_seen >= input_text_len:
-                                                # локальный -> абсолютный, плюс запас 0.2с
-                                                local_end = float(getattr(p, "end_time", 0.0) or 0.0)
-                                                end_abs_sec = chunk_start_sec + local_end + SAFETY_TAIL
+                                        if asr_chars_seen >= input_text_len:
+                                            # ВНИМАНИЕ: p.end_time — уже глобальные секунды относительно начала стрима
+                                            end_abs_sec = float(getattr(p, "end_time", 0.0) or 0.0) + SAFETY_TAIL
 
-                                                keep_samples = int(round(end_abs_sec * sr_out)) - emitted_samples_total
-                                                keep_samples = max(0, min(keep_samples, processed_wav_chunk.numel()))
+                                            # Сколько сэмплов 24k уже отдали наружу
+                                            keep_samples_abs_24k = int(round(end_abs_sec * sr_out))
+                                            keep_samples_rel = keep_samples_abs_24k - emitted_samples_total
+                                            keep_samples_rel = max(0, min(keep_samples_rel, processed_wav_chunk.numel()))
 
-                                                if keep_samples < processed_wav_chunk.numel():
-                                                    processed_wav_chunk = processed_wav_chunk[:keep_samples]
+                                            if keep_samples_rel < processed_wav_chunk.numel():
+                                                processed_wav_chunk = processed_wav_chunk[:keep_samples_rel]
 
-                                                is_end = True
-                                                break
+                                            is_end = True
+                                            break  # выходим из обхода фраз
 
-                        # учёт метрик (после возможного решения об остановке, но без подрезки чанка)
+                        # Учёт метрик
                         if processed_wav_chunk is not None and processed_wav_chunk.numel() > 0:
                             now = time.perf_counter()
                             chunk_generation_time_total += now - last_chunk_time
@@ -927,7 +918,7 @@ class Xtts(BaseTTS):
                             chunk_count += 1
                             generated_audio_samples += processed_wav_chunk.numel()
 
-                        # отдаём наружу
+                        # Отдаём наружу
                         if processed_wav_chunk is not None and processed_wav_chunk.numel() > 0:
                             yield processed_wav_chunk
                             if asr_enabled:
@@ -939,7 +930,7 @@ class Xtts(BaseTTS):
                     # ---- Путь усечения истории до небольшого контекста ----
                     L = len(all_latents)
                     new_cnt = len(last_tokens)
-                    ctx_tok = min(int(left_context_tokens), max(0, L - new_cnt)) # type: ignore
+                    ctx_tok = min(int(left_context_tokens), max(0, L - new_cnt))  # type: ignore
 
                     decode_start = L - (ctx_tok + new_cnt)
                     if decode_start < 0:
@@ -951,22 +942,17 @@ class Xtts(BaseTTS):
                         if is_end:
                             # Финальный хвост: отдай overlap и завершай.
                             if wav_overlap is not None and wav_overlap.numel() > 0:
-                                # (По желанию: прогнать через шумодав, как для out_chunk)
                                 out_np = wav_overlap.detach().cpu().numpy()
                                 out_np = self._apply_noise_reduction(out_np)
                                 yield torch.from_numpy(out_np.copy()).to(self.device).float()
-                            break  # выходим из while
+                            break
                         else:
-                            # Ждём ещё токенов
                             last_tokens = []
                             continue
-                        
-                    gpt_latents = torch.cat(window, dim=0)[None, :]
 
+                    gpt_latents = torch.cat(window, dim=0)[None, :]
                     if length_scale != 1.0:
-                        gpt_latents = F.interpolate(
-                            gpt_latents.transpose(1, 2), scale_factor=length_scale, mode="linear"
-                        ).transpose(1, 2)
+                        gpt_latents = F.interpolate(gpt_latents.transpose(1, 2), scale_factor=length_scale, mode="linear").transpose(1, 2)
 
                     wav_partial = self.hifigan_decoder(gpt_latents, g=speaker_embedding).squeeze().contiguous()  # [S_part]
 
@@ -976,24 +962,22 @@ class Xtts(BaseTTS):
                     ctx_samples = (ctx_samples // hop) * hop
 
                     if ctx_samples >= wav_partial.shape[-1]:
-                        # защита от вырожденного случая: контекст длиннее
                         new_wav = wav_partial
                     else:
-                        new_wav = wav_partial[ctx_samples:]  # только «новая» часть
+                        new_wav = wav_partial[ctx_samples:]
 
-                    # единообразная обработка шума ДЛЯ ВСЕГО куска до разбиения (чтобы overlap и out совпадали по домену)
+                    # единообразный денойз до разбиения
                     if new_wav.numel() > 0 and apply_denoise:
                         _cpu = new_wav.detach().cpu().numpy()
                         _cpu = self._apply_noise_reduction(_cpu)
                         new_wav = torch.from_numpy(_cpu.copy()).to(self.device).float()
 
-                    # кросс-фейдим с прошлым overlap и готовим overlap на следующий шаг
+                    # кроссфейд
                     if wav_overlap is not None and new_wav.numel() >= overlap_len:
                         head = new_wav[:overlap_len]
                         head.mul_(fade_in).add_(wav_overlap * fade_out)
                         new_wav[:overlap_len] = head
 
-                    # делим на отдаваемую часть и новый overlap
                     if new_wav.numel() > overlap_len:
                         out_chunk = new_wav[:-overlap_len]
                         wav_overlap = new_wav[-overlap_len:]
@@ -1001,39 +985,31 @@ class Xtts(BaseTTS):
                         out_chunk = torch.empty(0, device=new_wav.device, dtype=new_wav.dtype)
                         wav_overlap = new_wav.clone()
 
-                    if out_chunk.numel() > 0:
-                        processed_wav_chunk = out_chunk
-                    else:
-                        processed_wav_chunk = out_chunk  # пусто — ничего не отдаём
+                    processed_wav_chunk = out_chunk
 
                     if processed_wav_chunk.numel() > 0 and time_to_first_audio is None:
                         time_to_first_audio = time.perf_counter() - start_time
                     if processed_wav_chunk.numel() > 0:
                         generated_audio_samples += processed_wav_chunk.numel()
-
                         now = time.perf_counter()
                         chunk_generation_time_total += now - last_chunk_time
                         last_chunk_time = now
                         chunk_count += 1
 
-                    # чистим историю, оставляя только левый контекст для следующего окна
+                    # чистим историю, оставляя левый контекст
                     if ctx_tok > 0:
                         all_latents = all_latents[-ctx_tok:]
                     else:
                         all_latents = []
                     last_tokens = []
 
-                    yield processed_wav_chunk
+                    if processed_wav_chunk.numel() > 0:
+                        yield processed_wav_chunk
 
         total_time = time.perf_counter() - start_time
         generated_audio_seconds = generated_audio_samples / sr_out if sr_out else 0.0
-        real_time_factor = (
-            (total_time / generated_audio_seconds) if generated_audio_seconds > 0 else None
-        )
-
-        average_chunk_generation_time = (
-            chunk_generation_time_total / chunk_count if chunk_count > 0 else 0.0
-        )
+        real_time_factor = (total_time / generated_audio_seconds) if generated_audio_seconds > 0 else None
+        average_chunk_generation_time = (chunk_generation_time_total / chunk_count) if chunk_count > 0 else 0.0
 
         metrics = StreamingMetrics(
             time_to_first_token=time_to_first_token,
@@ -1041,8 +1017,8 @@ class Xtts(BaseTTS):
             real_time_factor=real_time_factor,
             latency=average_chunk_generation_time,
         )
-
         return metrics
+
 
     def forward(self):
         raise NotImplementedError(

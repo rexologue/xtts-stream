@@ -19,3 +19,7 @@ model:
   config: config.json
   checkpoint: model.pth
   tokenizer: vocab.json
+
+extra:
+  enable_accentizer: true
+  enable_asr_cutting: true

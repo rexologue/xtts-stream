@@ -17,7 +17,7 @@ from ruaccent import RUAccent
 
 from xtts_stream.core.xtts import Xtts
 from xtts_stream.core.xtts_config import XttsArgs, XttsAudioConfig, XttsConfig
-from xtts_stream.api.service.settings import ResolvedModelSettings
+from xtts_stream.api.service.settings import ResolvedModelSettings, ExtraSettings
 from xtts_stream.api.wrappers.base import StreamGenerationConfig, StreamingTTSWrapper
 
 
@@ -51,6 +51,8 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
         speaker_wav: Path,
         device: str,
         language: str,
+        use_accentizer: bool = True,
+        apply_asr: bool = True
     ) -> None:
         self.cfg = cfg
         self.cfg.model_dir = str(checkpoint.parent)
@@ -86,9 +88,14 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
 
         self.language = language
         self.device = device
+        self.apply_asr = apply_asr
 
-        self.accentizer = RUAccent()
-        self.accentizer.load(omograph_model_size='turbo3.1', use_dictionary=True, tiny_mode=False, device=device.upper())
+        if use_accentizer:
+            self.accentizer = RUAccent()
+            self.accentizer.load(omograph_model_size='turbo3.1', use_dictionary=True, tiny_mode=False, device=device.upper())
+
+        else:
+            self.accentizer = None
 
     @classmethod
     def from_environment(cls) -> "XttsStreamingWrapper":
@@ -110,7 +117,7 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
         )
 
     @classmethod
-    def from_settings(cls, settings: ResolvedModelSettings) -> "XttsStreamingWrapper":
+    def from_settings(cls, settings: ResolvedModelSettings, extra_settings: ExtraSettings) -> "XttsStreamingWrapper":
         device = settings.device
         if device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -123,6 +130,8 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
             speaker_wav=settings.speaker_wav,
             device=device,
             language=settings.language,
+            use_accentizer=extra_settings.enable_accentizer,
+            apply_asr=extra_settings.enable_asr_cutting
         )
 
     async def stream(
@@ -131,8 +140,13 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
         options: StreamGenerationConfig,
     ) -> AsyncIterator[np.ndarray]:
         def _make_gen():
+            if self.accentizer:
+                t = self.accentizer.process_all(text)
+            else:
+                t = text
+
             return self.model.inference_stream(
-                text=self.accentizer.process_all(text),
+                text=t,
                 language=options.language or self.language,
                 gpt_cond_latent=self.voice_latent,
                 speaker_embedding=self.voice_embed,
@@ -146,6 +160,7 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
                 repetition_penalty=self.cfg.repetition_penalty,
                 speed=options.speed,
                 enable_text_splitting=False,
+                apply_asr=self.apply_asr
             )
 
         generator = await asyncio.to_thread(_make_gen)
