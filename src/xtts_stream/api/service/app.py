@@ -55,7 +55,7 @@ logger.setLevel(logging.INFO)
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global tts_wrapper
-    tts_wrapper = XttsStreamingWrapper.from_settings(settings.model)
+    tts_wrapper = XttsStreamingWrapper.from_settings(settings.model, settings.extra)
     logger.info("XTTS model initialised and ready for generation.")
 
     # --- WARMUP: прогреть графы и вокодер до старта --- 
