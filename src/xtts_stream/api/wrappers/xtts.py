@@ -62,7 +62,11 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
         # Attempting to initialise them on CPU-only hosts makes the service crash during
         # startup. Respect the resolved device and fall back to the standard inference
         # path whenever CUDA is not available.
+        
         use_deepspeed = torch.cuda.is_available() and device.lower().startswith("cuda")
+
+        if not use_deepspeed:
+            raise ValueError(f"CUDA IS NOT AVAILABLE!")
 
         self.model.load_checkpoint(
             self.cfg,

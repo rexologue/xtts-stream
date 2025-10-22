@@ -60,6 +60,8 @@ async def run_client(args: argparse.Namespace) -> None:
         mode=args.mode,
     )
 
+    print(f"Runing the following URI: {uri}")
+
     # WAV-выход (по желанию)
     wf = None
     if not args.no_save:

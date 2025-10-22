@@ -156,9 +156,8 @@ class GPT(nn.Module):
 
             self.ds_engine = deepspeed.init_inference(
                 model=self.gpt_inference.half(),  # Transformers models
-                mp_size=1,  # Number of GPU
+                tensor_parallel={"tp_size":1},
                 dtype=torch.float32,  # desired data type of output
-                replace_method="auto",  # Lets DS autmatically identify the layer to replace
                 replace_with_kernel_inject=True,  # replace the model with the kernel injector
             )
             self.gpt_inference = self.ds_engine.module.eval()
