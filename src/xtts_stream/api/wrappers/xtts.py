@@ -57,12 +57,19 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
         self.cfg = cfg
         self.cfg.model_dir = str(checkpoint.parent)
         self.model = Xtts.init_from_config(self.cfg)
+
+        # DeepSpeed kernels are only available when running on CUDA capable hardware.
+        # Attempting to initialise them on CPU-only hosts makes the service crash during
+        # startup. Respect the resolved device and fall back to the standard inference
+        # path whenever CUDA is not available.
+        use_deepspeed = torch.cuda.is_available() and device.lower().startswith("cuda")
+
         self.model.load_checkpoint(
             self.cfg,
             checkpoint_path=str(checkpoint),
             vocab_path=str(tokenizer) if tokenizer else None,
             speaker_file_path=None,
-            use_deepspeed=True,
+            use_deepspeed=use_deepspeed,
         )
         self.model.to(device)
         self.model.eval()
