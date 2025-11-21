@@ -12,6 +12,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import AsyncIterator, List, Optional, Tuple
 
@@ -38,15 +39,43 @@ if CONFIG_ENV_VAR not in os.environ:
 
 CONFIG_PATH = Path(os.environ[CONFIG_ENV_VAR]).expanduser().resolve(strict=False)
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
 try:
     settings = load_settings(CONFIG_PATH)
 except SettingsError as exc:
     raise RuntimeError(str(exc)) from exc
 
-MAX_CONCURRENCY = settings.service.max_concurrency
+METRICS_LOG_FILENAME_TEMPLATE = "metrics_{date}.log"
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+metrics_logger: logging.Logger | None = None
+if settings.service.metrics_log_path:
+    metrics_log_dir = settings.service.metrics_log_path
+
+    if metrics_log_dir.exists() and not metrics_log_dir.is_dir():
+        raise RuntimeError(
+            "`service.metrics_log_path` must be a directory where metrics logs will be created: "
+            f"{metrics_log_dir}"
+        )
+
+    metrics_log_dir.mkdir(parents=True, exist_ok=True)
+
+    dated_metrics_file = metrics_log_dir / METRICS_LOG_FILENAME_TEMPLATE.format(
+        date=datetime.now().date().isoformat()
+    )
+
+    handler = logging.FileHandler(dated_metrics_file)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+
+    metrics_logger = logging.getLogger("xtts_stream.streaming_metrics")
+    metrics_logger.setLevel(logging.INFO)
+    metrics_logger.propagate = False
+    metrics_logger.addHandler(handler)
+
+    logger.info("Streaming metrics will be written to %s", dated_metrics_file)
+
+MAX_CONCURRENCY = settings.service.max_concurrency
 
 # ======================================================================================
 # Lifespan: model init / shutdown (+ warmup)
@@ -55,7 +84,9 @@ logger.setLevel(logging.INFO)
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global tts_wrapper
-    tts_wrapper = XttsStreamingWrapper.from_settings(settings.model, settings.extra)
+    tts_wrapper = XttsStreamingWrapper.from_settings(
+        settings.model, settings.extra, metrics_logger=metrics_logger
+    )
     logger.info("XTTS model initialised and ready for generation.")
 
     # --- WARMUP: прогреть графы и вокодер до старта --- 

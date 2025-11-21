@@ -10,6 +10,10 @@ services:
       API_PORT: "8000"
     volumes:
       - ${XTTS_SETTINGS_FILE:?XTTS_SETTINGS_FILE must be set to your config path}:/app/config.yaml:ro
+      # Optional: mount a writable directory for streaming metrics logging.
+      # `service.metrics_log_path` must point to this directory (e.g. /logs), and the
+      # service will create metrics_YYYY-MM-DD.log inside it automatically.
+      - ${XTTS_METRICS_LOG_DIR:-./logs}:/logs
       # Mount your XTTS checkpoint and reference audio inside the container, e.g.:
       # - /abs/path/to/xtts-checkpoint:/models:ro
       # - /abs/path/to/reference:/reference:ro
