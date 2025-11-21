@@ -23,6 +23,7 @@ class ServiceSettings:
     host: str = "0.0.0.0"
     port: int = 8000
     max_concurrency: int = 1
+    metrics_log_path: Optional[Path] = None
 
 
 # ================================
@@ -135,6 +136,7 @@ def load_settings(path: Path) -> Settings:
         host=str(service_data.get("host", ServiceSettings.host)),
         port=int(service_data.get("port", ServiceSettings.port)),
         max_concurrency=int(service_data.get("max_concurrency", ServiceSettings.max_concurrency)),
+        metrics_log_path=_resolve_optional_path(service_data.get("metrics_log_path"), base_dir=path.parent),
     )
 
     # --- model ---
@@ -195,6 +197,12 @@ def _resolve_optional(value: Optional[str], base_dir: Path, *, default: str) -> 
             path = (base_dir / path).resolve()
         return path
     return (base_dir / default).resolve()
+
+
+def _resolve_optional_path(value: Optional[str], base_dir: Path) -> Optional[Path]:
+    if value is None:
+        return None
+    return _resolve_path(str(value), base_dir)
 
 
 def _ensure_mapping(value: Any, section: str) -> Dict[str, Any]:

@@ -9,13 +9,15 @@ import asyncio
 from dataclasses import fields
 from pathlib import Path
 from typing import AsyncIterator, Optional
+import logging
+import time
 
 import numpy as np
 import torch
 
 from ruaccent import RUAccent
 
-from xtts_stream.core.xtts import Xtts
+from xtts_stream.core.xtts import StreamingMetrics, Xtts
 from xtts_stream.core.xtts_config import XttsArgs, XttsAudioConfig, XttsConfig
 from xtts_stream.api.service.settings import ResolvedModelSettings, ExtraSettings
 from xtts_stream.api.wrappers.base import StreamGenerationConfig, StreamingTTSWrapper
@@ -52,7 +54,8 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
         device: str,
         language: str,
         use_accentizer: bool = True,
-        apply_asr: bool = True
+        apply_asr: bool = True,
+        metrics_logger: Optional[logging.Logger] = None,
     ) -> None:
         self.cfg = cfg
         self.cfg.model_dir = str(checkpoint.parent)
@@ -100,6 +103,7 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
         self.language = language
         self.device = device
         self.apply_asr = apply_asr
+        self.metrics_logger = metrics_logger
 
         if use_accentizer:
             self.accentizer = RUAccent()
@@ -128,7 +132,13 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
         )
 
     @classmethod
-    def from_settings(cls, settings: ResolvedModelSettings, extra_settings: ExtraSettings) -> "XttsStreamingWrapper":
+    def from_settings(
+        cls,
+        settings: ResolvedModelSettings,
+        extra_settings: ExtraSettings,
+        *,
+        metrics_logger: Optional[logging.Logger] = None,
+    ) -> "XttsStreamingWrapper":
         device = settings.device
         if device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -142,7 +152,8 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
             device=device,
             language=settings.language,
             use_accentizer=extra_settings.enable_accentizer,
-            apply_asr=extra_settings.enable_asr_cutting
+            apply_asr=extra_settings.enable_asr_cutting,
+            metrics_logger=metrics_logger,
         )
 
     async def stream(
@@ -175,17 +186,26 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
             )
 
         generator = await asyncio.to_thread(_make_gen)
-        _sentinel = object()
 
         def _next_chunk():
             try:
                 return next(generator)
-            except StopIteration:
-                return _sentinel
+            except StopIteration as stop:
+                return stop
 
         while True:
             chunk = await asyncio.to_thread(_next_chunk)
-            if chunk is _sentinel:
+            if isinstance(chunk, StopIteration):
+                metrics: Optional[StreamingMetrics] = getattr(chunk, "value", None)
+                if metrics and self.metrics_logger:
+                    payload = {
+                        "time_to_first_token": metrics.time_to_first_token,
+                        "time_to_first_audio": metrics.time_to_first_audio,
+                        "real_time_factor": metrics.real_time_factor,
+                        "latency": metrics.latency,
+                        "timestamp": time.time(),
+                    }
+                    self.metrics_logger.info(json.dumps(payload, ensure_ascii=False))
                 break
             if chunk is None:
                 continue
