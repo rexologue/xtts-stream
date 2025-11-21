@@ -15,6 +15,8 @@ import torch
 from xtts_stream.core.xtts import Xtts
 from xtts_stream.core.xtts_config import XttsArgs, XttsAudioConfig, XttsConfig
 
+from ruaccent import RUAccent
+
 
 def _filter_kwargs(cls, data: dict) -> dict:
     allowed = {f.name for f in fields(cls)}
@@ -60,6 +62,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--speed", type=float, default=1.0)
     parser.add_argument("--split-text", action="store_true", help="Enable automatic sentence splitting")
     parser.add_argument("--asr", action="store_true", help="Enable ASR module to improve work on short sequances")
+    parser.add_argument("--accent", action="store_true", help="Enable RUAccent for auto-accentizing text")
     parser.add_argument("--stream", action="store_true", help="Enable streaming synthesis")
     parser.add_argument(
         "--stream-chunk-size",
@@ -97,6 +100,12 @@ def main() -> None:
         config.length_penalty = args.length_penalty
     if args.repetition_penalty is not None:
         config.repetition_penalty = args.repetition_penalty
+
+    if args.accent:
+        accentizer = RUAccent()
+        accentizer.load(omograph_model_size='turbo3.1', use_dictionary=True, tiny_mode=False)
+        print("RUAccent Enabled!")
+        args.text = accentizer.process_all(args.text)
     
 
     model = Xtts.init_from_config(config)
