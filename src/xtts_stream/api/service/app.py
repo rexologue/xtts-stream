@@ -38,15 +38,29 @@ if CONFIG_ENV_VAR not in os.environ:
 
 CONFIG_PATH = Path(os.environ[CONFIG_ENV_VAR]).expanduser().resolve(strict=False)
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
 try:
     settings = load_settings(CONFIG_PATH)
 except SettingsError as exc:
     raise RuntimeError(str(exc)) from exc
 
-MAX_CONCURRENCY = settings.service.max_concurrency
+metrics_logger: logging.Logger | None = None
+if settings.service.metrics_log_path:
+    metrics_log_path = settings.service.metrics_log_path
+    metrics_log_path.parent.mkdir(parents=True, exist_ok=True)
+    handler = logging.FileHandler(metrics_log_path)
+    handler.setFormatter(logging.Formatter("%(message)s"))
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+    metrics_logger = logging.getLogger("xtts_stream.streaming_metrics")
+    metrics_logger.setLevel(logging.INFO)
+    metrics_logger.propagate = False
+    metrics_logger.addHandler(handler)
+
+    logger.info("Streaming metrics will be written to %s", metrics_log_path)
+
+MAX_CONCURRENCY = settings.service.max_concurrency
 
 # ======================================================================================
 # Lifespan: model init / shutdown (+ warmup)
@@ -55,7 +69,9 @@ logger.setLevel(logging.INFO)
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global tts_wrapper
-    tts_wrapper = XttsStreamingWrapper.from_settings(settings.model, settings.extra)
+    tts_wrapper = XttsStreamingWrapper.from_settings(
+        settings.model, settings.extra, metrics_logger=metrics_logger
+    )
     logger.info("XTTS model initialised and ready for generation.")
 
     # --- WARMUP: прогреть графы и вокодер до старта --- 
