@@ -26,6 +26,8 @@ class ServiceSettings:
     host: str
     port: int
     instances: int
+    log_dir: Optional[Path] = None
+    max_concurrency: int = 1
 
 
 @dataclass
@@ -84,6 +86,10 @@ def load_settings(path: Path) -> Settings:
             host=str(service_raw["host"]),
             port=int(service_raw["port"]),
             instances=int(service_raw["instances"]),
+            log_dir=Path(service_raw["log_dir"]).expanduser().resolve()
+            if "log_dir" in service_raw
+            else None,
+            max_concurrency=int(service_raw.get("max_concurrency", 1)),
         )
     except KeyError as exc:
         raise SettingsError(f"Service configuration is incomplete! Missing {exc.args[0]}")
@@ -92,6 +98,8 @@ def load_settings(path: Path) -> Settings:
         raise SettingsError("Invalid service port specification!")
     if service.instances < 1:
         raise SettingsError("instances must be >= 1")
+    if service.log_dir and service.log_dir.exists() and not service.log_dir.is_dir():
+        raise SettingsError("log_dir must point to a directory")
 
     try:
         model_dir = Path(model_raw["directory"]).expanduser().resolve()

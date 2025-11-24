@@ -6,6 +6,8 @@ service:
   port: 8000
   # Number of worker processes to launch for generation
   instances: 1
+  # Directory for worker streaming metrics logs
+  log_dir: /app/logs
 
 model:
   # Directory containing XTTS artefacts (model.pth, config.json, vocab.json, ref_file)

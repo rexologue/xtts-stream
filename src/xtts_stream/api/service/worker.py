@@ -10,12 +10,15 @@ import os
 import re
 import time
 import copy
+from datetime import datetime
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import AsyncIterator, List, Optional, Tuple
 
 import numpy as np
+import torch
+import torchaudio
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,9 +31,12 @@ from xtts_stream.api.wrappers.xtts import XttsStreamingWrapper
 
 
 CONFIG_ENV_VAR = "XTTS_CONFIG_FILE"
+ALLOWED_SAMPLE_RATES = {8000, 16000, 24000, 44100}
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+_worker_port: int | None = None
+metrics_logger: logging.Logger | None = None
 
 
 class _WorkerPortFilter(logging.Filter):
@@ -60,19 +66,42 @@ def _log_config_with_worker(port: int) -> dict:
     return cfg
 
 
+def _init_metrics_logger(log_dir: Path, port: int) -> tuple[logging.Logger, Path]:
+    if log_dir.exists() and not log_dir.is_dir():
+        raise RuntimeError(f"log_dir must be a directory: {log_dir}")
+
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    dated = log_dir / f"metrics_{datetime.now().date().isoformat()}_{port}.log"
+    handler = logging.FileHandler(dated)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+
+    logger = logging.getLogger(f"xtts_stream.streaming_metrics.{port}")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+    for existing in list(logger.handlers):
+        logger.removeHandler(existing)
+    logger.addHandler(handler)
+
+    return logger, dated
+
+
 def _config_path() -> Path:
     if CONFIG_ENV_VAR not in os.environ:
         raise RuntimeError("Environment variable XTTS_CONFIG_FILE must point to the service configuration file.")
     return Path(os.environ[CONFIG_ENV_VAR]).expanduser().resolve(strict=False)
 
 
-def parse_el_audio_format(fmt: str, expected_sr: int) -> Tuple[str, int]:
+def parse_el_audio_format(fmt: str) -> Tuple[str, int]:
     m = re.match(r"^pcm_(\d{4,6})$", fmt)
     if not m:
         raise ValueError(f"Unsupported EL_AUDIO_FORMAT '{fmt}'. Expected 'pcm_<sr>'.")
     sr = int(m.group(1))
-    if sr != expected_sr:
-        raise ValueError(f"Requested sample rate {sr} does not match model output {expected_sr}.")
+    if sr not in ALLOWED_SAMPLE_RATES:
+        raise ValueError(
+            f"Unsupported sample rate {sr}. Allowed: {sorted(ALLOWED_SAMPLE_RATES)}."
+        )
     return "pcm", sr
 
 
@@ -83,6 +112,20 @@ def pcm_from_float(frame_f32: np.ndarray) -> bytes:
     x = np.clip(x, -1.0, 1.0)
     pcm = (x * 32767.0).astype(np.int16, copy=False)
     return pcm.tobytes()
+
+
+def _maybe_resample_frame(frame_f32: np.ndarray, src_sr: int, dst_sr: int) -> np.ndarray:
+    """Resample ``frame_f32`` to ``dst_sr`` using torchaudio if needed."""
+
+    if src_sr == dst_sr:
+        return frame_f32
+
+    tensor = torch.from_numpy(np.asarray(frame_f32, dtype=np.float32))
+    if tensor.ndim != 1:
+        tensor = tensor.reshape(-1)
+
+    resampled = torchaudio.functional.resample(tensor.unsqueeze(0), src_sr, dst_sr)
+    return resampled.squeeze(0).cpu().numpy()
 
 
 @dataclass
@@ -166,14 +209,21 @@ class GenContext:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global tts_wrapper
+    global tts_wrapper, metrics_logger
     cfg_path = _config_path()
     try:
         settings = load_settings(cfg_path)
     except SettingsError as exc:
         raise RuntimeError(str(exc)) from exc
 
-    tts_wrapper = XttsStreamingWrapper.from_settings(settings.model)
+    metrics_logger = None
+    if settings.service.log_dir:
+        if _worker_port is None:
+            raise RuntimeError("Worker port is not initialised")
+        metrics_logger, metrics_path = _init_metrics_logger(settings.service.log_dir, _worker_port)
+        logger.info("Streaming metrics will be written to %s", metrics_path)
+
+    tts_wrapper = XttsStreamingWrapper.from_settings(settings.model, metrics_logger=metrics_logger)
     logger.info("XTTS model initialised and ready for generation.")
 
     try:
@@ -242,7 +292,7 @@ async def ws_stream_input(ws: WebSocket, voice_id: str):
         pending_initial_packet = None
 
     try:
-        encoding, sr = parse_el_audio_format(output_format, tts_wrapper.sample_rate if tts_wrapper else 0)
+        encoding, sr = parse_el_audio_format(output_format)
         assert encoding == "pcm"
     except Exception as e:
         await ws.send_text(json.dumps({"error": f"Invalid EL_AUDIO_FORMAT: {e}"}))
@@ -250,6 +300,7 @@ async def ws_stream_input(ws: WebSocket, voice_id: str):
         return
 
     pacer = Pacer(sample_rate=sr, target_lead_ms=target_lead_ms)
+    source_sample_rate = tts_wrapper.sample_rate if tts_wrapper is not None else sr
 
     generation_options = StreamGenerationConfig(
         stream_chunk_size=stream_chunk_size,
@@ -309,7 +360,8 @@ async def ws_stream_input(ws: WebSocket, voice_id: str):
                         aggregator = PacketAggregator(schedule_frames=ctx.frame_schedule or [], default_frames_per_packet=1)
 
                         async for frame in stream_audio(tts_wrapper, pending, ctx.generation_options):
-                            raw_bytes = pcm_from_float(frame)
+                            resampled = _maybe_resample_frame(frame, source_sample_rate, sr)
+                            raw_bytes = pcm_from_float(resampled)
                             frame_ms = pacer.duration_ms_from_pcm_bytes(len(raw_bytes))
 
                             for pkt_bytes, pkt_ms in aggregator.add_frame(raw_bytes, frame_ms):
@@ -346,7 +398,8 @@ async def ws_stream_input(ws: WebSocket, voice_id: str):
                         aggregator = PacketAggregator(schedule_frames=ctx.frame_schedule or [], default_frames_per_packet=1)
 
                         async for frame in stream_audio(tts_wrapper, pending, ctx.generation_options):
-                            raw_bytes = pcm_from_float(frame)
+                            resampled = _maybe_resample_frame(frame, source_sample_rate, sr)
+                            raw_bytes = pcm_from_float(resampled)
                             frame_ms = pacer.duration_ms_from_pcm_bytes(len(raw_bytes))
 
                             for pkt_bytes, pkt_ms in aggregator.add_frame(raw_bytes, frame_ms):
@@ -374,6 +427,8 @@ async def ws_stream_input(ws: WebSocket, voice_id: str):
 
 
 def run_worker(port: int) -> None:
+    global _worker_port
+    _worker_port = port
     _configure_worker_logging(port)
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info", log_config=_log_config_with_worker(port))
 
