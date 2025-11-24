@@ -58,6 +58,7 @@ service:
   host: 0.0.0.0
   port: 60215
   instances: 2   # количество воркеров (процессов)
+  log_dir: /path/to/logs   # директория для метрик стриминга
 
 model:
   directory: path/to/model_dir   # содержит model.pth, config.json, vocab.json
