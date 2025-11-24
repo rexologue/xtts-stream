@@ -25,7 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from uvicorn.config import LOGGING_CONFIG
 
 from xtts_stream.api.service.pacing import DEFAULT_TARGET_LEAD_MS, MAX_PACKET_MS, Pacer, iter_time_shards
-from xtts_stream.api.service.settings import SettingsError, load_settings
+from xtts_stream.api.service.settings import Settings, SettingsError, load_settings
 from xtts_stream.api.wrappers.base import StreamGenerationConfig, StreamingTTSWrapper
 from xtts_stream.api.wrappers.xtts import XttsStreamingWrapper
 
@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 _worker_port: int | None = None
 metrics_logger: logging.Logger | None = None
+service_settings: Settings | None = None
 
 
 class _WorkerPortFilter(logging.Filter):
@@ -209,21 +210,21 @@ class GenContext:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global tts_wrapper, metrics_logger
+    global tts_wrapper, metrics_logger, service_settings
     cfg_path = _config_path()
     try:
-        settings = load_settings(cfg_path)
+        service_settings = load_settings(cfg_path)
     except SettingsError as exc:
         raise RuntimeError(str(exc)) from exc
 
     metrics_logger = None
-    if settings.service.log_dir:
+    if service_settings.service.log_dir:
         if _worker_port is None:
             raise RuntimeError("Worker port is not initialised")
-        metrics_logger, metrics_path = _init_metrics_logger(settings.service.log_dir, _worker_port)
+        metrics_logger, metrics_path = _init_metrics_logger(service_settings.service.log_dir, _worker_port)
         logger.info("Streaming metrics will be written to %s", metrics_path)
 
-    tts_wrapper = XttsStreamingWrapper.from_settings(settings.model, metrics_logger=metrics_logger)
+    tts_wrapper = XttsStreamingWrapper.from_settings(service_settings.model, metrics_logger=metrics_logger)
     logger.info("XTTS model initialised and ready for generation.")
 
     try:
@@ -256,6 +257,11 @@ async def stream_audio(wrapper: Optional[StreamingTTSWrapper], text: str, option
 @app.websocket("/v1/text-to-speech/{voice_id}/stream-input")
 async def ws_stream_input(ws: WebSocket, voice_id: str):
     await ws.accept()
+
+    if service_settings is None:
+        await ws.send_text(json.dumps({"error": "Service settings not initialised"}))
+        await ws.close(code=1011)
+        return
 
     qp = dict(ws.query_params)
 
@@ -302,7 +308,7 @@ async def ws_stream_input(ws: WebSocket, voice_id: str):
     pacer = Pacer(
         sample_rate=sr,
         target_lead_ms=target_lead_ms,
-        first_packet_no_wait=settings.service.first_packet_no_wait,
+        first_packet_no_wait=service_settings.service.first_packet_no_wait,
     )
     source_sample_rate = tts_wrapper.sample_rate if tts_wrapper is not None else sr
 
