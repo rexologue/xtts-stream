@@ -5,15 +5,15 @@ from __future__ import annotations
 import os
 import re
 import json
-import asyncio
-from dataclasses import fields
-from pathlib import Path
-from typing import AsyncIterator, Optional
-import logging
 import time
+import asyncio
+import logging
+from pathlib import Path
+from dataclasses import fields
+from typing import AsyncIterator, Optional
 
-import numpy as np
 import torch
+import numpy as np
 
 from ruaccent import RUAccent
 
@@ -30,14 +30,19 @@ def _filter_kwargs(cls, data: dict) -> dict:
 
 def load_config(config_path: Path) -> XttsConfig:
     raw = json.loads(Path(config_path).read_text(encoding="utf-8"))
+
     model_args = raw.get("model_args", {})
     audio_args = raw.get("audio", {})
     cfg_kwargs = _filter_kwargs(XttsConfig, raw)
+
     cfg = XttsConfig(**cfg_kwargs)
+
     if isinstance(model_args, dict):
         cfg.model_args = XttsArgs(**_filter_kwargs(XttsArgs, model_args))
+
     if isinstance(audio_args, dict):
         cfg.audio = XttsAudioConfig(**_filter_kwargs(XttsAudioConfig, audio_args))
+
     return cfg
 
 
@@ -95,6 +100,7 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
         self.voice_embed = voice["speaker_embedding"]
 
         self.sample_rate = int(self.cfg.model_args.output_sample_rate)
+        
         if self.sample_rate != 24000:
             raise RuntimeError(
                 "Expected model output_sample_rate=24000, got {0}".format(self.sample_rate)

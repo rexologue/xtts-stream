@@ -4,28 +4,28 @@ FastAPI app exposing a streaming TTS websocket compatible with ElevenLabs "strea
 
 from __future__ import annotations
 
-import asyncio
-import base64
-import json
-import logging
 import os
 import re
 import time
-from dataclasses import dataclass
-from datetime import datetime
+import json
+import base64
+import asyncio
+import logging
 from pathlib import Path
+from datetime import datetime
+from dataclasses import dataclass
 from typing import AsyncIterator, List, Optional, Tuple
 
 import numpy as np
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
+from xtts_stream.api.wrappers.xtts import XttsStreamingWrapper
 from xtts_stream.api.service.settings import SettingsError, load_settings
 from xtts_stream.api.wrappers.base import StreamGenerationConfig, StreamingTTSWrapper
-from xtts_stream.api.wrappers.xtts import XttsStreamingWrapper
 
 # ======================================================================================
 # Settings & init
@@ -247,6 +247,7 @@ class PacketAggregator:
             self.cur_frames = 0
             self.cur_ms = 0.0
             return pkt
+        
         return None
 
 # ======================================================================================
