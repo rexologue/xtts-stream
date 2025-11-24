@@ -56,7 +56,7 @@ class WorkerPool:
         self.workers: list[WorkerHandle] = []
         self._lock = asyncio.Lock()
 
-    async def _wait_for_ready(self, worker: WorkerHandle, timeout: float = 30.0) -> None:
+    async def _wait_for_ready(self, worker: WorkerHandle, timeout: float = 300.0) -> None:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
 
