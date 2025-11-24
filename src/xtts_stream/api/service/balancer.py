@@ -7,6 +7,7 @@ import sys
 import random
 import socket
 import asyncio
+from asyncio.streams import StreamReader, StreamWriter
 from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass
@@ -55,6 +56,28 @@ class WorkerPool:
         self.workers: list[WorkerHandle] = []
         self._lock = asyncio.Lock()
 
+    async def _wait_for_ready(self, worker: WorkerHandle, timeout: float = 30.0) -> None:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+
+        while True:
+            if worker.process.returncode is not None:
+                raise RuntimeError("A worker process exited unexpectedly during startup")
+
+            try:
+                reader: StreamReader
+                writer: StreamWriter
+                reader, writer = await asyncio.open_connection("127.0.0.1", worker.port)
+            except OSError:
+                if loop.time() > deadline:
+                    raise TimeoutError(f"Timed out waiting for worker on port {worker.port} to start")
+                await asyncio.sleep(0.05)
+                continue
+
+            writer.close()
+            await writer.wait_closed()
+            return
+
     async def start(self, instances: int) -> None:
         for _ in range(instances):
             port = _random_port()
@@ -65,6 +88,8 @@ class WorkerPool:
                 env={**os.environ, CONFIG_ENV_VAR: str(self.config_path)},
             )
             self.workers.append(WorkerHandle(port=port, process=proc))
+
+        await asyncio.gather(*(self._wait_for_ready(worker) for worker in self.workers))
 
     async def acquire(self) -> WorkerHandle:
         while True:
