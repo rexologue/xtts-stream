@@ -48,12 +48,12 @@ RUN python3 -m pip install --no-cache-dir -r /app/requirements.txt && rm -rf /ro
 # ------------------------------------------------------------------------------
 COPY src ./src
 
-# Runtime will fail fast if XTTS_SETTINGS_FILE is not provided
+# Runtime will fail fast if XTTS_CONFIG_FILE is not provided
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 EXPOSE ${API_PORT}
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["python", "-m", "xtts_stream.api.service.app"]
+CMD ["python", "-m", "xtts_stream.api.service.balancer"]
 

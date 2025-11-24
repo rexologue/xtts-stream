@@ -1,26 +1,21 @@
 # XTTS Stream configuration file
-# Copy this file to config.yaml and adjust the paths/settings for your environment.
+# Copy this file and set XTTS_CONFIG_FILE to its path before starting the service.
 
-# It's highly recommended to not change `service.log_path`, `model.directory` and `model.ref_file` 
-# when running from Docker
-
-service: 
+service:
   host: 0.0.0.0
   port: 8000
-  # How much instances to up on the machine
-  instances: 1 
-  # Directory where the service will log metrics
-  log_path: /app/logs
+  # Number of worker processes to launch for generation
+  instances: 1
 
 model:
-  # Path to the directory that contains the XTTS checkpoint artifacts.
+  # Directory containing XTTS artefacts (model.pth, config.json, vocab.json, ref_file)
   directory: /app/model
   # Reference audio used for voice cloning.
   ref_file: /app/reference.wav
   # Language for the model.
-  language: ru 
-
-extra:
+  language: ru
+  # Device hint ("auto", "cuda", "cpu")
+  device: auto
+  # Enable RUAccent auto-accentizer preprocessing.
   enable_accentizer: true
-  enable_asr_cutting: false
 

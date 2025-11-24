@@ -1,177 +1,126 @@
-"""Configuration loader for the streaming service."""
+"""Strict YAML configuration loader for the streaming service.
+
+All runtime options must be sourced from the provided YAML file. The only
+permitted environment variable is ``XTTS_CONFIG_FILE`` which selects the YAML
+path. No other overrides are allowed.
+"""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
-from dataclasses import dataclass
 
-import yaml
 import torch
+import yaml
 
 
 class SettingsError(RuntimeError):
     """Raised when the application configuration is invalid."""
 
 
-# ================================
-# SERVICE
-# ================================
 @dataclass
 class ServiceSettings:
-    """Runtime settings for the FastAPI service."""
+    """Runtime settings for the public balancer service."""
 
-    host: str = "0.0.0.0"
-    port: int = 8000
-    instances: int = 1
-    log_path: Optional[Path] = None
+    host: str
+    port: int
+    instances: int
 
 
-# ================================
-# MODEL
-# ================================
 @dataclass
 class ModelSettings:
-    """Resolved model artefact locations and runtime configuration."""
+    """Model artefact locations and runtime options."""
 
     directory: Path
     config_path: Path
     checkpoint_path: Path
-    tokenizer_path: Path
-    reference_wav: Path
+    tokenizer_path: Optional[Path]
+    speaker_wav: Path
     language: str
+    device: str = "auto"
+    enable_accentizer: bool = True
 
 
-# ================================
-# EXTRA OPTIONS
-# ================================
-@dataclass
-class ExtraSettings:
-    """Optional extra features for the runtime service."""
-
-    enable_accentizer: bool = False
-    enable_asr_cutting: bool = False
-
-
-# ================================
-# ALL SETTINGS
-# ================================
 @dataclass
 class Settings:
-    """Top level application settings."""
+    """Top-level configuration bundle."""
 
     service: ServiceSettings
     model: ModelSettings
-    extra: ExtraSettings
 
 
-# ================================
-# LOADERS
-# ================================
+def _require_path(base: Path, relative: str, *, kind: str) -> Path:
+    candidate = (base / relative).expanduser().resolve()
+    if kind == "file" and (not candidate.exists() or candidate.is_dir()):
+        raise SettingsError(f"Expected file does not exist: {candidate}")
+    if kind == "dir" and (not candidate.exists() or not candidate.is_dir()):
+        raise SettingsError(f"Expected directory does not exist: {candidate}")
+    return candidate
+
+
 def load_settings(path: Path) -> Settings:
-    """Load settings from the given YAML ``path``."""
-
-    if not torch.cuda.is_available():
-        raise SettingsError("CUDA is not available on this machine! Service working is not possible.")
+    """Load and validate settings from ``path``."""
 
     if not path.exists():
         raise SettingsError(f"Configuration file not found: {path}")
 
-    with path.open("r", encoding="utf-8") as f:
-        try:
-            raw = yaml.safe_load(f) or {}
-        except yaml.YAMLError as exc:
-            raise SettingsError(f"Failed to parse configuration file: {path}") from exc
+    if not torch.cuda.is_available():
+        raise SettingsError("CUDA is not available on this machine! Service working is not possible.")
 
     try:
-        service_data = raw["service"]
-    except KeyError:
-        raise SettingsError(f"Failde to extract `service` configuration block!")
-    try:
-        model_data = raw["model"]
-    except KeyError:
-        raise SettingsError(f"Failde to extract `model` configuration block!")
-    try:
-        extra_data = raw["extra"]
-    except KeyError:
-        raise SettingsError(f"Failde to extract `extra` configuration block!")
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        raise SettingsError(f"Failed to parse configuration file: {path}") from exc
 
-    # --- service ---
     try:
-        host = service_data["host"]
-        port = service_data["port"]
-        instances = service_data["instances"]
-        log_path = service_data["instances"]
+        service_raw = raw["service"]
+        model_raw = raw["model"]
+    except KeyError as exc:
+        raise SettingsError(f"Missing configuration block: {exc.args[0]}")
 
-    except KeyError as e:
-        missing_key = e.args[0]
-        raise SettingsError(f"Service configuration is incomplete! Missing {missing_key}")
-    
-    if port < 1 or port > 65535 or not isinstance(port, int):
+    try:
+        service = ServiceSettings(
+            host=str(service_raw["host"]),
+            port=int(service_raw["port"]),
+            instances=int(service_raw["instances"]),
+        )
+    except KeyError as exc:
+        raise SettingsError(f"Service configuration is incomplete! Missing {exc.args[0]}")
+
+    if not (1 <= service.port <= 65535):
         raise SettingsError("Invalid service port specification!")
-    if instances < 1 or not isinstance(instances, int):
-        raise SettingsError("Invalid service instances specification!")
-    if not isinstance(log_path, str):
-        raise SettingsError("Invalid service log path specification!")
-    
-    log_path = Path(log_path).expanduser().resolve()
+    if service.instances < 1:
+        raise SettingsError("instances must be >= 1")
 
-    if not log_path.is_dir():
-        raise SettingsError("Invalid service log path specification!")
-
-    log_path.mkdir(exist_ok=True, parents=True)
-    
-    service = ServiceSettings(
-        host,
-        port,
-        instances,
-        log_path
-    )
-
-    # --- model ---
     try:
-        directory = model_data["directory"]
-        ref_file = model_data["ref_file"]
-        language = model_data["language"]
+        model_dir = Path(model_raw["directory"]).expanduser().resolve()
+        language = str(model_raw["language"])
+    except KeyError as exc:
+        raise SettingsError(f"Model configuration is incomplete! Missing {exc.args[0]}")
 
-    except KeyError as e:
-        missing_key = e.args[0]
-        raise SettingsError(f"Model configuration is incomplete! Missing {missing_key}")
-    
-    directory = Path(directory).expanduser().resolve()
-    ref_file = Path(ref_file).expanduser().resolve()
-
-    if not directory.exists() or not directory.is_dir():
+    if not model_dir.exists() or not model_dir.is_dir():
         raise SettingsError("Invalid model directory specification!")
-    
-    if not ref_file.exists() or ref_file.is_dir():
-        raise SettingsError("Invalid reference file specification!")
-    
-    ckp = directory / "model.pth"
-    dvae = directory / "dvae.pth"
-    stats = directory / "mel_stats.pth"
-    vocab = directory / "vocab.json"
-    config = directory / "config.json"
 
-    if not ckp.exists() or not dvae.exists() or not stats.exists() or not vocab.exists() or not config.exists():
-         raise SettingsError("Invalid model directory structure!")
-    
+    device = str(model_raw.get("device", "auto"))
+    enable_accentizer = bool(model_raw.get("enable_accentizer", True))
+
+    checkpoint = _require_path(model_dir, "model.pth", kind="file")
+    config_path = _require_path(model_dir, "config.json", kind="file")
+    tokenizer_path = _require_path(model_dir, "vocab.json", kind="file")
+    speaker_rel = model_raw.get("ref_file", "ref.wav")
+    speaker_wav = _require_path(model_dir, speaker_rel, kind="file")
+
     model = ModelSettings(
-        directory,
-        config,
-        ckp,
-        vocab,
-        ref_file,
-        language
+        directory=model_dir,
+        config_path=config_path,
+        checkpoint_path=checkpoint,
+        tokenizer_path=tokenizer_path,
+        speaker_wav=speaker_wav,
+        language=language,
+        device=device,
+        enable_accentizer=enable_accentizer,
     )
 
-    # --- extra ---
-    extra = ExtraSettings(
-        enable_accentizer=bool(extra_data.get("enable_accentizer", False)),
-        enable_asr_cutting=bool(extra_data.get("enable_asr_cutting", False)),
-    )
-
-    return Settings(service=service, model=model, extra=extra)
-
-
+    return Settings(service=service, model=model)
 

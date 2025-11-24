@@ -1,5 +1,5 @@
 """FastAPI service package."""
 
-from .app import app
+from .balancer import app
 
 __all__ = ["app"]
