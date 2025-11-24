@@ -7,12 +7,12 @@ path. No other overrides are allowed.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+from dataclasses import dataclass
 
-import torch
 import yaml
+import torch
 
 
 class SettingsError(RuntimeError):

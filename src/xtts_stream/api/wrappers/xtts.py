@@ -2,20 +2,21 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import time
+import asyncio
 import logging
-from dataclasses import fields
 from pathlib import Path
+from dataclasses import fields
 from typing import AsyncIterator, Optional
 
-import numpy as np
 import torch
+import numpy as np
 from ruaccent import RUAccent
 
 from xtts_stream.api.service.settings import ModelSettings
 from xtts_stream.api.wrappers.base import StreamGenerationConfig, StreamingTTSWrapper
+
 from xtts_stream.core.xtts import StreamingMetrics, Xtts
 from xtts_stream.core.xtts_config import XttsArgs, XttsAudioConfig, XttsConfig
 
@@ -75,6 +76,7 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
         )
         self.model.to(device)
         self.model.eval()
+
         torch.manual_seed(0)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(0)
@@ -86,6 +88,7 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
             "sound_norm_refs": self.cfg.sound_norm_refs,
         }
         voice = self.model.clone_voice(speaker_wav=str(speaker_wav), **voice_settings)
+
         self.voice_latent = voice["gpt_conditioning_latents"]
         self.voice_embed = voice["speaker_embedding"]
 
@@ -95,8 +98,8 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
                 "Expected model output_sample_rate=24000, got {0}".format(self.sample_rate)
             )
 
-        self.language = language
         self.device = device
+        self.language = language
         self.metrics_logger = metrics_logger
 
         if use_accentizer:
@@ -184,6 +187,7 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
                     }
                     self.metrics_logger.info(json.dumps(payload, ensure_ascii=False))
                 break
+            
             if chunk is None:
                 continue
             if isinstance(chunk, torch.Tensor):

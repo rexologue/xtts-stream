@@ -2,23 +2,24 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
+import sys
 import random
 import socket
-import sys
-from contextlib import asynccontextmanager
-from dataclasses import dataclass
+import asyncio
 from pathlib import Path
 from typing import Optional
+from dataclasses import dataclass
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
 import websockets
 
-from xtts_stream.api.service.settings import Settings, SettingsError, load_settings
+import uvicorn
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+
 from xtts_stream.api.service.worker import run_worker
+from xtts_stream.api.service.settings import Settings, SettingsError, load_settings
 
 
 CONFIG_ENV_VAR = "XTTS_CONFIG_FILE"
