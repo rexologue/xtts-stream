@@ -110,7 +110,7 @@ def _worker(params: dict) -> dict:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run N streaming queries in parallel")
+    parser = argparse.ArgumentParser(description="Run streaming queries for latency testing")
     parser.add_argument("--host", default="127.0.0.1", help="Server host")
     parser.add_argument("--port", type=int, default=60215, help="Server port")
     parser.add_argument("--voice-id", default="VOICE123", help="Voice identifier")
@@ -122,7 +122,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--speed", type=float, default=1.0)
     parser.add_argument("--language", default=None)
     parser.add_argument("--target_lead_ms", type=float, default=20.0)
-    parser.add_argument("--queries", type=int, default=4, help="Number of parallel requests")
+    parser.add_argument("--queries", type=int, default=4, help="Number of requests per run")
+    parser.add_argument("--runs", type=int, default=1, help="Number of sequential runs")
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=0.0,
+        help="Delay in milliseconds between sequential requests (0 for parallel)",
+    )
     parser.add_argument(
         "--metrics-file",
         default="metrics.csv",
@@ -131,15 +138,19 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def write_results(path: str, results: list[dict]) -> None:
+def write_results(path: str, runs_results: list[list[dict]]) -> None:
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["index", "latency_ms", "ttfa_ms", "error"])
-        for idx, item in enumerate(results):
-            writer.writerow([idx, item.get("latency_ms"), item.get("ttfa_ms"), item.get("error")])
+        writer.writerow(["run", "index", "latency_ms", "ttfa_ms", "error"])
+        for run_idx, results in enumerate(runs_results):
+            for idx, item in enumerate(results):
+                writer.writerow(
+                    [run_idx, idx, item.get("latency_ms"), item.get("ttfa_ms"), item.get("error")]
+                )
 
 
-def print_summary(results: list[dict]) -> None:
+def print_summary(results: list[dict], run_idx: int) -> None:
+    print(f"Run {run_idx + 1} results:")
     successes = [r for r in results if r.get("error") is None]
     for idx, item in enumerate(results):
         if item.get("error"):
@@ -175,13 +186,25 @@ def main() -> None:
         target_lead_ms=args.target_lead_ms,
     )
 
-    with ProcessPoolExecutor(max_workers=args.queries) as executor:
-        futures = [executor.submit(_worker, params) for _ in range(args.queries)]
-        results = [future.result() for future in futures]
+    all_results: list[list[dict]] = []
+    for run_idx in range(args.runs):
+        print(f"Starting run {run_idx + 1}/{args.runs}...")
+        if args.delay <= 0:
+            with ProcessPoolExecutor(max_workers=args.queries) as executor:
+                futures = [executor.submit(_worker, params) for _ in range(args.queries)]
+                results = [future.result() for future in futures]
+        else:
+            results = []
+            for query_idx in range(args.queries):
+                results.append(_worker(params))
+                if query_idx < args.queries - 1:
+                    time.sleep(args.delay / 1000.0)
 
-    write_results(args.metrics_file, results)
+        all_results.append(results)
+        print_summary(results, run_idx)
+
+    write_results(args.metrics_file, all_results)
     print(f"Saved metrics to {args.metrics_file}")
-    print_summary(results)
 
 
 if __name__ == "__main__":
