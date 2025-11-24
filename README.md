@@ -47,8 +47,8 @@ speaker audio. Required artefacts inside the model directory are:
    You can also override the device, default language, and optional filenames in
    the same section.
 
-Always set `XTTS_SETTINGS_FILE` to the absolute path of the configuration before
-launching any command that touches the service or wrappers.
+Always set `XTTS_CONFIG_FILE` to the absolute path of the configuration before
+launching any command that touches the balancer or worker processes.
 
 ## Usage
 
@@ -96,20 +96,21 @@ PYTHONPATH=src python -m xtts_stream.inference.infer_xtts \
 
 ### Streaming service
 
-The websocket service lives in `src/xtts_stream/api/service/app.py` and exposes the
-ElevenLabs-compatible `stream-input` protocol. Start it with:
+The websocket service now runs as a balancer with multiple worker processes. Each
+worker loads a single XTTS instance, and the balancer proxies incoming
+ElevenLabs-compatible `stream-input` requests to the first free worker.
 
 Ensure your configuration file is in place (see the [Configuration](#configuration)
 section) and start the service with:
 
 ```bash
-XTTS_SETTINGS_FILE=/absolute/path/to/config.yaml PYTHONPATH=src \
-  python -m xtts_stream.api.service.app
+XTTS_CONFIG_FILE=/absolute/path/to/config.yaml PYTHONPATH=src \
+  python -m xtts_stream.api.service.balancer
 ```
 
 Wrapper classes located under `src/xtts_stream/api/wrappers` provide reusable hooks
 for other models. Implement `xtts_stream.api.wrappers.base.StreamingTTSWrapper` for
-new backends and import your implementation inside the service module.
+new backends and import your implementation inside the worker module.
 
 ### Docker deployment
 
@@ -120,14 +121,14 @@ the websocket API in a container. Build the image and launch the service with:
 # Build the runtime image (CUDA 12.1 + cuDNN runtime)
 docker compose build
 
-# Ensure your custom config file is ready and referenced via XTTS_SETTINGS_FILE
-export XTTS_SETTINGS_FILE="$(pwd)/config.yaml"
+# Ensure your custom config file is ready and referenced via XTTS_CONFIG_FILE
+export XTTS_CONFIG_FILE="$(pwd)/config.yaml"
 
 # Start the websocket API on port 8000 with GPU access
 docker compose up
 ```
 
-The compose file mounts the host path provided via `XTTS_SETTINGS_FILE` into
+The compose file mounts the host path provided via `XTTS_CONFIG_FILE` into
 `/app/config.yaml`, exposes port `8000`, and requests all available NVIDIA GPUs.
 Adjust the environment variable before launching to point at the desired config
 file and add extra `volumes` entries pointing to the XTTS checkpoint directory
