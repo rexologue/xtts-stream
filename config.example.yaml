@@ -25,4 +25,4 @@ model:
 
 extra:
   enable_accentizer: true
-  enable_asr_cutting: true
+  enable_asr_cutting: false

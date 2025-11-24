@@ -54,7 +54,7 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
         device: str,
         language: str,
         use_accentizer: bool = True,
-        apply_asr: bool = True,
+        apply_asr: bool = False,
         metrics_logger: Optional[logging.Logger] = None,
     ) -> None:
         self.cfg = cfg
