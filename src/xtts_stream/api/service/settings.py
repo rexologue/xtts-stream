@@ -28,6 +28,7 @@ class ServiceSettings:
     instances: int
     log_dir: Optional[Path] = None
     max_concurrency: int = 1
+    first_packet_no_wait: bool = False
 
 
 @dataclass
@@ -90,6 +91,7 @@ def load_settings(path: Path) -> Settings:
             if "log_dir" in service_raw
             else None,
             max_concurrency=int(service_raw.get("max_concurrency", 1)),
+            first_packet_no_wait=bool(service_raw.get("first_packet_no_wait", False)),
         )
     except KeyError as exc:
         raise SettingsError(f"Service configuration is incomplete! Missing {exc.args[0]}")

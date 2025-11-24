@@ -299,7 +299,11 @@ async def ws_stream_input(ws: WebSocket, voice_id: str):
         await ws.close(code=1003)
         return
 
-    pacer = Pacer(sample_rate=sr, target_lead_ms=target_lead_ms)
+    pacer = Pacer(
+        sample_rate=sr,
+        target_lead_ms=target_lead_ms,
+        first_packet_no_wait=settings.service.first_packet_no_wait,
+    )
     source_sample_rate = tts_wrapper.sample_rate if tts_wrapper is not None else sr
 
     generation_options = StreamGenerationConfig(
