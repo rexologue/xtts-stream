@@ -21,6 +21,7 @@ class Pacer:
 
     sample_rate: int
     target_lead_ms: float = DEFAULT_TARGET_LEAD_MS
+    first_packet_no_wait: bool = False
 
     def __post_init__(self) -> None:
         self.bytes_per_sec = self.sample_rate * PCM_BYTES_PER_SAMPLE * PCM_CHANNELS
@@ -32,6 +33,8 @@ class Pacer:
         return nbytes * self.ms_per_byte
 
     async def wait_before_send(self, next_frame_ms: float) -> None:
+        if self.first_packet_no_wait and self.sent_ms == 0:
+            return
         while True:
             now_ms = (time.monotonic() - self.start_t) * 1000.0
             ahead_ms = self.sent_ms - now_ms

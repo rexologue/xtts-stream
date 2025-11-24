@@ -154,6 +154,7 @@ def parse_el_audio_format(fmt: str) -> Tuple[str, int]:
 class Pacer:
     sample_rate: int
     target_lead_ms: float = DEFAULT_TARGET_LEAD_MS
+    first_packet_no_wait: bool = False
 
     def __post_init__(self):
         self.bytes_per_sec = self.sample_rate * PCM_BYTES_PER_SAMPLE * PCM_CHANNELS
@@ -165,6 +166,8 @@ class Pacer:
         return nbytes * self.ms_per_byte
 
     async def wait_before_send(self, next_frame_ms: float):
+        if self.first_packet_no_wait and self.sent_ms == 0:
+            return
         while True:
             now_ms = (time.monotonic() - self.start_t) * 1000.0
             ahead_ms = self.sent_ms - now_ms
@@ -412,7 +415,11 @@ async def ws_stream_input(ws: WebSocket, voice_id: str):  # noqa: D401
         await ws.close(code=1003)
         return
 
-    pacer = Pacer(sample_rate=sr, target_lead_ms=target_lead_ms)
+    pacer = Pacer(
+        sample_rate=sr,
+        target_lead_ms=target_lead_ms,
+        first_packet_no_wait=settings.service.first_packet_no_wait,
+    )
 
     # ---------- 3) Стартовые опции генерации ----------
     generation_options = StreamGenerationConfig(
