@@ -71,6 +71,7 @@ async def stream_once(
     ttfa_ms: Optional[float] = None
 
     ffplay_process = None
+    ffplay_stdin_closed = False
     if play:
         if shutil.which("ffplay") is None:
             raise RuntimeError("ffplay not found; install FFmpeg or disable --play")
@@ -115,9 +116,14 @@ async def stream_once(
                     ttfa_ms = (time.perf_counter() - flush_sent_at) * 1000.0
                 chunk = base64.b64decode(response["audio"])
                 audio.extend(chunk)
-                if ffplay_process and ffplay_process.stdin:
-                    ffplay_process.stdin.write(chunk)
-                    await ffplay_process.stdin.drain()
+                if ffplay_process and ffplay_process.stdin and not ffplay_stdin_closed:
+                    try:
+                        ffplay_process.stdin.write(chunk)
+                        await ffplay_process.stdin.drain()
+                    except (BrokenPipeError, ConnectionResetError):
+                        # ffplay may exit early (e.g., if it cannot play the stream);
+                        # keep streaming without playback instead of crashing.
+                        ffplay_stdin_closed = True
 
             if response.get("isFinal") is True:
                 break
