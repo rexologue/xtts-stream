@@ -7,6 +7,7 @@ import base64
 import json
 import time
 import wave
+import shutil
 from typing import Optional
 
 import websockets
@@ -49,6 +50,7 @@ async def stream_once(
     speed: float,
     language: Optional[str],
     target_lead_ms: float,
+    play: bool,
 ) -> tuple[bytes, float, Optional[float]]:
     """Send a single TTS request and return audio, total latency, and TTFA."""
 
@@ -67,6 +69,26 @@ async def stream_once(
     audio = bytearray()
     start = time.perf_counter()
     ttfa_ms: Optional[float] = None
+
+    ffplay_process = None
+    if play:
+        if shutil.which("ffplay") is None:
+            raise RuntimeError("ffplay not found; install FFmpeg or disable --play")
+        ffplay_process = await asyncio.create_subprocess_exec(
+            "ffplay",
+            "-autoexit",
+            "-nodisp",
+            "-f",
+            f"pcm_s16le",
+            "-ar",
+            str(sr),
+            "-ac",
+            "1",
+            "-",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
 
     async with websockets.connect(uri, max_size=None) as ws:
         init_message = {
@@ -91,12 +113,21 @@ async def stream_once(
             if "audio" in response:
                 if ttfa_ms is None:
                     ttfa_ms = (time.perf_counter() - flush_sent_at) * 1000.0
-                audio.extend(base64.b64decode(response["audio"]))
+                chunk = base64.b64decode(response["audio"])
+                audio.extend(chunk)
+                if ffplay_process and ffplay_process.stdin:
+                    ffplay_process.stdin.write(chunk)
+                    await ffplay_process.stdin.drain()
 
             if response.get("isFinal") is True:
                 break
 
     latency_ms = (time.perf_counter() - start) * 1000.0
+    if ffplay_process:
+        if ffplay_process.stdin:
+            ffplay_process.stdin.close()
+            await ffplay_process.stdin.wait_closed()
+        await ffplay_process.wait()
     return bytes(audio), latency_ms, ttfa_ms
 
 
@@ -114,6 +145,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--language", default=None)
     parser.add_argument("--target_lead_ms", type=float, default=20.0)
     parser.add_argument("--outfile", default="out.wav", help="Path to save WAV output")
+    parser.add_argument("--play", action="store_true", help="Play audio with ffplay while streaming")
+    parser.add_argument("--no-save", action="store_true", help="Do not write the resulting WAV file")
     return parser.parse_args()
 
 
@@ -140,11 +173,13 @@ def main() -> None:
             speed=args.speed,
             language=args.language,
             target_lead_ms=args.target_lead_ms,
+            play=args.play,
         )
     )
 
-    write_wav(args.outfile, audio, args.sr)
-    print(f"Saved audio to {args.outfile}")
+    if not args.no_save:
+        write_wav(args.outfile, audio, args.sr)
+        print(f"Saved audio to {args.outfile}")
     print(f"Total latency: {latency_ms:.1f} ms")
     if ttfa_ms is not None:
         print(f"TTFA: {ttfa_ms:.1f} ms")
