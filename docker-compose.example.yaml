@@ -4,6 +4,8 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: xtts-service
+    environment:
+      - XTTS_CONFIG_FILE=/app/config.yaml
     network_mode: host
     volumes:
       # Mount real configuration file 
@@ -12,7 +14,7 @@ services:
       - /abs/path/to/logs/directory:/app/logs
       # Mount your XTTS checkpoint and reference audio inside the container, e.g.:
       - /abs/path/to/xtts-checkpoint:/app/model:ro
-      - /abs/path/to/reference.wav:/app/reference:ro
+      - /abs/path/to/reference.wav:/app/reference.wav:ro
     restart: unless-stopped
     deploy:
       resources:
