@@ -159,7 +159,6 @@ class XttsArgs(Coqpit):
         gpt_code_stride_len (int, optional): The hop_size of dvae and consequently of the gpt output. Defaults to 1024.
         gpt_use_masking_gt_prompt_approach (bool, optional):  If True, it will use ground truth as prompt and it will mask the loss to avoid repetition. Defaults to True.
         gpt_use_perceiver_resampler (bool, optional):  If True, it will use perceiver resampler from flamingo paper - https://arxiv.org/abs/2204.14198. Defaults to False.
-        asr (bool, optional):  If True, applies ASR model for cutting audio of short sequences. Defaults to False.
     """
 
     gpt_batch_size: int = 1
@@ -202,9 +201,6 @@ class XttsArgs(Coqpit):
     xtts_checkpoint: str = "model.pth"
     vocoder: str = ""
 
-    # ASR
-    asr: bool = False
-
 
 class Xtts(BaseTTS):
     """XTTS model implementation.
@@ -219,7 +215,7 @@ class Xtts(BaseTTS):
         >>> model.load_checkpoint(config, checkpoint_dir="paths/to/models_dir/", eval=True)
     """
 
-    def __init__(self, config: Coqpit):
+    def __init__(self, config: Coqpit, apply_asr=False):
         super().__init__(config)
         self.mel_stats_path = None
         self.config = config
@@ -231,7 +227,7 @@ class Xtts(BaseTTS):
         self.init_models()
         self.register_buffer("mel_stats", torch.ones(80))
 
-        if config.model_args.asr:
+        if apply_asr:
             self.asr_model = StreamingCTCPipeline.from_hugging_face()
 
         else:
@@ -557,7 +553,7 @@ class Xtts(BaseTTS):
         gpt_cond_latent,
         speaker_embedding,
         # GPT inference
-        temperature: float = 0.75,
+        temperature: float = 0.0,
         length_penalty: float = 1.0,
         repetition_penalty: float = 10.0,
         top_k: int = 50,
@@ -610,7 +606,7 @@ class Xtts(BaseTTS):
 
         if apply_asr:
             if self.asr_model is None:
-                raise ValueError("For using ASR load intialize XTTS model with asr=True")
+                raise ValueError("For using ASR load intialize XTTS model with apply_asr=True")
             
             if len(text) > SHORT_SEQ_THRESHOLD:
                 apply_asr = False
@@ -790,8 +786,7 @@ class Xtts(BaseTTS):
             trim_to_context = False  # при активном ASR — не используем усечение контекста
 
             # Для совсем коротких реплик удлиним вход (поможет детекции окончания)
-            while len(text) <= SHORT_SEQ_THRESHOLD:
-                text += (" " + text)
+            text += " "*(SHORT_SEQ_THRESHOLD - len(text))
 
         if enable_text_splitting:
             text_list = split_sentence(text, language, self.tokenizer.char_limits[language])
@@ -1032,7 +1027,7 @@ class Xtts(BaseTTS):
 
     @staticmethod
     def init_from_config(config: "XttsConfig", **kwargs):  # pylint: disable=unused-argument # type: ignore
-        return Xtts(config)
+        return Xtts(config, **kwargs)
 
     def eval(self):  # pylint: disable=redefined-builtin
         """Sets the model to evaluation mode. Overrides the default eval() method to also set the GPT model to eval mode."""

@@ -61,7 +61,7 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
     ) -> None:
         self.cfg = cfg
         self.cfg.model_dir = str(checkpoint.parent)
-        self.model = Xtts.init_from_config(self.cfg)
+        self.model = Xtts.init_from_config(self.cfg, apply_asr=True)
 
         use_deepspeed = torch.cuda.is_available() and device.lower().startswith("cuda")
         if not use_deepspeed:
@@ -108,7 +108,7 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
                 omograph_model_size="turbo3.1",
                 use_dictionary=True,
                 tiny_mode=False,
-                device=device.upper(),
+                device="CUDA",
             )
         else:
             self.accentizer = None
@@ -162,7 +162,7 @@ class XttsStreamingWrapper(StreamingTTSWrapper):
                 repetition_penalty=self.cfg.repetition_penalty,
                 speed=options.speed,
                 enable_text_splitting=False,
-                apply_asr=False,
+                apply_asr=True,
             )
 
         generator = await asyncio.to_thread(_make_gen)

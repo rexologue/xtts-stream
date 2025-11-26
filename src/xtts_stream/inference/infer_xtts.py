@@ -108,7 +108,7 @@ def main() -> None:
         args.text = accentizer.process_all(args.text)
     
 
-    model = Xtts.init_from_config(config)
+    model = Xtts.init_from_config(config, apply_asr=args.asr)
     model.load_checkpoint(
         config,
         checkpoint_path=str(args.checkpoint),
