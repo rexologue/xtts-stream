@@ -4,8 +4,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from queue import Queue
-import threading
 
 import librosa
 import torch
@@ -23,10 +21,11 @@ from xtts_stream.core.hifigan_decoder import HifiDecoder
 from xtts_stream.core.stream_generator import init_stream_support
 from xtts_stream.core.tone import StreamingCTCPipeline
 from xtts_stream.core.tone_utils import (
-    prepare_for_tone, 
+    prepare_for_tone,
     trim_by_seconds,
     normalize_text
 )
+from xtts_stream.core.asr_cutter import AsrCutter
 
 @dataclass
 class StreamingMetrics:
@@ -231,9 +230,18 @@ class Xtts(BaseTTS):
 
         if apply_asr:
             self.asr_model = StreamingCTCPipeline.from_hugging_face()
+            self.asr_cutter = AsrCutter(
+                self.asr_model,
+                target_text="",
+                output_sample_rate=getattr(self.args, "output_sample_rate", 24000),
+                seq_reconstruct_threshold=SEQ_RECONSTRUCT_THRESHOLD,
+                safety_tail=0.2,
+                short_seq_threshold=SHORT_SEQ_THRESHOLD,
+            )
 
         else:
             self.asr_model = None
+            self.asr_cutter = None
 
     def init_models(self):
         """Initialize the models. We do it here since we need to load the tokenizer first."""
@@ -771,72 +779,16 @@ class Xtts(BaseTTS):
         trim_to_context = bool(left_context_tokens and left_context_tokens > 0)
 
         # ====== ВСТРОЕННЫЙ СТРИМ-ASR (tone) ======
-        asr_thread: threading.Thread | None = None
-        asr_task_queue: Queue[tuple[np.ndarray, int, int] | None] | None = None
-        asr_result_queue: Queue[tuple[int | None, bool]] | None = None
         asr_enabled = bool(
             apply_asr
             and len(text) <= SHORT_SEQ_THRESHOLD
-            and hasattr(self, "asr_model")
-            and self.asr_model is not None
+            and hasattr(self, "asr_cutter")
+            and self.asr_cutter is not None
         )
         if asr_enabled:
-            SAFETY_TAIL = 0.2  # seconds
-            target_norm = normalize_text(text)
-            input_text_len = int(SEQ_RECONSTRUCT_THRESHOLD * len(target_norm))
-            asr_chunk_samples = int(getattr(self.asr_model, "CHUNK_SIZE", 2400))  # 2400 @ 8kHz = 0.3s
-            asr_task_queue: Queue[tuple[np.ndarray, int, int] | None] = Queue()
-            asr_result_queue: Queue[tuple[int | None, bool]] = Queue()
             emitted_samples_total = 0  # считаем отданные наружу сэмплы в sr_out для корректной обрезки
             trim_to_context = False  # при активном ASR — не используем усечение контекста
-
-            # Для совсем коротких реплик удлиним вход (поможет детекции окончания)
-            text += " "*(SHORT_SEQ_THRESHOLD - len(text))
-
-            def asr_worker():
-                _asr_buffer = np.empty(0, dtype=np.int32)
-                _asr_streaming_state = None
-                _asr_chars_seen = 0
-                _is_end_local = False
-
-                while True:
-                    task = asr_task_queue.get()
-                    if task is None:
-                        break
-
-                    pcm_chunk, chunk_samples_out, emitted_so_far = task
-                    cut_samples_rel: int | None = None
-
-                    _asr_buffer = np.concatenate([_asr_buffer, pcm_chunk])
-
-                    while _asr_buffer.shape[0] >= asr_chunk_samples and not _is_end_local:
-                        feed = _asr_buffer[:asr_chunk_samples]
-                        _asr_buffer = _asr_buffer[asr_chunk_samples:]
-
-                        new_phrases, _asr_streaming_state = self.asr_model.forward(feed, _asr_streaming_state)
-                        if new_phrases:
-                            for p in new_phrases:
-                                # Нормлизуем и считаем символы один-в-один с target_norm (без удаления пробелов)
-                                t_norm = normalize_text(getattr(p, "text", ""))
-                                if not t_norm:
-                                    continue
-                                _asr_chars_seen += len(t_norm)
-
-                                if _asr_chars_seen >= input_text_len:
-                                    end_abs_sec = float(getattr(p, "end_time", 0.0) or 0.0) + SAFETY_TAIL
-                                    keep_samples_abs_24k = int(round(end_abs_sec * sr_out))
-                                    keep_samples_rel = keep_samples_abs_24k - emitted_so_far
-                                    cut_samples_rel = max(0, min(keep_samples_rel, chunk_samples_out))
-
-                                    _is_end_local = True
-                                    break  # выходим из обхода фраз
-
-                    asr_result_queue.put((cut_samples_rel, _is_end_local))
-
-                asr_result_queue.put((None, False))
-
-            asr_thread = threading.Thread(target=asr_worker, daemon=True)
-            asr_thread.start()
+            self.asr_cutter.start_session(text)
 
         if enable_text_splitting:
             text_list = split_sentence(text, language, self.tokenizer.char_limits[language])
@@ -921,15 +873,18 @@ class Xtts(BaseTTS):
 
                         # ====== ASR-обрезка по tone (секунды — ГЛОБАЛЬНЫЕ) ======
                         if asr_enabled and processed_wav_chunk is not None and processed_wav_chunk.numel() > 0:
-                            pcm = prepare_for_tone(processed_wav_chunk.detach().cpu().numpy(), sr=sr_out)
-                            asr_task_queue.put((pcm, processed_wav_chunk.numel(), emitted_samples_total))
-                            cut_samples_rel, should_end = asr_result_queue.get()
+                            self.asr_cutter.push_audio_chunk(
+                                processed_wav_chunk, emitted_samples_total
+                            )
+                            result = self.asr_cutter.get_result(block=True)
+                            if result:
+                                cut_samples_rel, should_end = result
 
-                            if cut_samples_rel is not None and cut_samples_rel < processed_wav_chunk.numel():
-                                processed_wav_chunk = processed_wav_chunk[:cut_samples_rel]
+                                if cut_samples_rel is not None and cut_samples_rel < processed_wav_chunk.numel():
+                                    processed_wav_chunk = processed_wav_chunk[:cut_samples_rel]
 
-                            if should_end:
-                                is_end = True
+                                if should_end:
+                                    is_end = True
 
                         # Учёт метрик
                         if processed_wav_chunk is not None and processed_wav_chunk.numel() > 0:
@@ -1026,10 +981,6 @@ class Xtts(BaseTTS):
 
                     if processed_wav_chunk.numel() > 0:
                         yield processed_wav_chunk
-
-        if asr_thread is not None and asr_task_queue is not None:
-            asr_task_queue.put(None)
-            asr_thread.join()
 
         total_time = time.perf_counter() - start_time
         generated_audio_seconds = generated_audio_samples / sr_out if sr_out else 0.0
