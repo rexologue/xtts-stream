@@ -130,7 +130,9 @@ def _config_path() -> Path:
 
 async def _proxy_stream(client_ws: WebSocket, balancer_ws_url: str) -> None:
     async with websockets.connect(
-        balancer_ws_url, max_size=None, additional_headers={BROKER_HEADER: "1"}
+        balancer_ws_url,
+        max_size=None,
+        additional_headers={BROKER_HEADER: "1"},
     ) as backend:
         logger.info("Proxying websocket traffic to %s", balancer_ws_url)
 
@@ -156,10 +158,26 @@ async def _proxy_stream(client_ws: WebSocket, balancer_ws_url: str) -> None:
                         await client_ws.send_bytes(msg)
                     else:
                         await client_ws.send_text(msg)
+
+            # Нормальное закрытие backend WS — НЕ ошибка
+            except websockets.exceptions.ConnectionClosedOK:
+                logger.info("Backend websocket closed cleanly; closing client websocket")
+                try:
+                    await client_ws.close()
+                except RuntimeError:
+                    # Клиент уже закрылся / close уже был отправлен — окей
+                    logger.info("Client websocket already closed on backend clean close")
+
+            # Реальные ошибки при проксировании
             except Exception:
                 logger.exception("Error while forwarding balancer messages; closing client websocket")
-                await client_ws.close()
+                try:
+                    await client_ws.close(code=1011)
+                except RuntimeError:
+                    logger.info("Client websocket already closed when handling error in balancer_to_client")
 
+        # Если оба корутина завершаются без исключений, _proxy_stream
+        # отработает штатно и наружу ничего не полетит
         await asyncio.gather(client_to_balancer(), balancer_to_client())
 
 
@@ -227,10 +245,16 @@ def create_app(settings: BrokerSettings) -> FastAPI:
 
         try:
             await _proxy_stream(ws, balancer_url)
+        except websockets.exceptions.ConnectionClosedOK:
+            logger.info("Websocket with balancer %s closed cleanly", balancer.id)
+            # Ничего не делаем, это штатная ситуация
         except Exception:
             logger.exception("Proxy failure; dropping balancer %s and closing websocket", balancer.id)
             await pool.drop(balancer.id)
-            await ws.close(code=1011, reason="Failed to proxy request")
+            try:
+                await ws.close(code=1011, reason="Failed to proxy request")
+            except RuntimeError:
+                logger.info("Client websocket already closed when handling proxy failure")
 
     return app
 

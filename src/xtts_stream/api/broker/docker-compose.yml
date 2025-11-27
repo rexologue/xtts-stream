@@ -10,3 +10,8 @@ services:
     volumes:
       - /home/user5/xtts-stream/src/xtts_stream/api/broker/broker.config.yaml:/app/broker.config.yaml:ro
     restart: unless-stopped
+    develop:
+      watch:
+        - path: /home/user5/xtts-stream/src/xtts_stream/api/broker
+          target: /app
+          action: sync

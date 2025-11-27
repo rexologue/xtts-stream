@@ -237,6 +237,8 @@ async def ws_balancer(ws: WebSocket, voice_id: str):
                     while True:
                         msg = await ws.receive_text()
                         await backend.send(msg)
+                except websockets.exceptions.ConnectionClosedOK:
+                    pass
                 except WebSocketDisconnect:
                     await backend.close()
                 except Exception:
@@ -250,6 +252,8 @@ async def ws_balancer(ws: WebSocket, voice_id: str):
                             await ws.send_bytes(msg)
                         else:
                             await ws.send_text(msg)
+                except websockets.exceptions.ConnectionClosedOK:
+                    pass
                 except Exception:
                     await ws.close()
 
