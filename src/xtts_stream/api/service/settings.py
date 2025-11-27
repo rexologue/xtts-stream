@@ -29,6 +29,9 @@ class ServiceSettings:
     log_dir: Optional[Path] = None
     max_concurrency: int = 1
     first_packet_no_wait: bool = False
+    standalone_mode: bool = True
+    broker_host: Optional[str] = None
+    broker_port: Optional[int] = None
 
 
 @dataclass
@@ -92,6 +95,9 @@ def load_settings(path: Path) -> Settings:
             else None,
             max_concurrency=int(service_raw.get("max_concurrency", 1)),
             first_packet_no_wait=bool(service_raw.get("first_packet_no_wait", False)),
+            standalone_mode=bool(service_raw.get("standalone_mode", True)),
+            broker_host=str(service_raw.get("broker_host")) if service_raw.get("broker_host") else None,
+            broker_port=int(service_raw.get("broker_port")) if service_raw.get("broker_port") is not None else None,
         )
     except KeyError as exc:
         raise SettingsError(f"Service configuration is incomplete! Missing {exc.args[0]}")
@@ -102,6 +108,11 @@ def load_settings(path: Path) -> Settings:
         raise SettingsError("instances must be >= 1")
     if service.log_dir and service.log_dir.exists() and not service.log_dir.is_dir():
         raise SettingsError("log_dir must point to a directory")
+    if not service.standalone_mode:
+        if not service.broker_host:
+            raise SettingsError("broker_host must be set when standalone_mode is false")
+        if service.broker_port is None or not (1 <= service.broker_port <= 65535):
+            raise SettingsError("broker_port must be a valid TCP port when standalone_mode is false")
 
     try:
         model_dir = Path(model_raw["directory"]).expanduser().resolve()

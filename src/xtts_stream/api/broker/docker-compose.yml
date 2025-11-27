@@ -1,0 +1,15 @@
+services:
+  xtts-broker:
+    build:
+      context: ../../..
+      dockerfile: src/xtts_stream/api/broker/Dockerfile
+    container_name: xtts-broker
+    environment:
+      - XTTS_BROKER_CONFIG_FILE=/app/broker.config.example.yaml
+      - PYTHONPATH=/app/src
+    volumes:
+      - ../../..:/app:ro
+      - ../../../../broker.config.example.yaml:/app/broker.config.example.yaml:ro
+    ports:
+      - "9000:9000"
+    restart: unless-stopped

@@ -6,6 +6,12 @@ service:
   port: 8000
   # Number of worker processes to launch for generation
   instances: 1
+  # When true, accept client connections directly. When false, the balancer
+  # registers with a central Broker and only accepts requests forwarded by it.
+  standalone_mode: true
+  # Broker connection details (required when standalone_mode is false)
+  broker_host: 127.0.0.1
+  broker_port: 9000
   # Directory for worker streaming metrics logs
   log_dir: /app/logs
   # Send the very first PCM shard without waiting for pacing lead
