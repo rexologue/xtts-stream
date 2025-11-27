@@ -48,6 +48,7 @@ class BalancerPool:
         self._balancers: Dict[str, BalancerRegistration] = {}
         self._lock = asyncio.Lock()
         self._timeout = timeout_seconds
+        self._client = httpx.AsyncClient(timeout=self._timeout)
 
     async def register(self, registration: BalancerRegistration) -> None:
         async with self._lock:
@@ -72,23 +73,23 @@ class BalancerPool:
 
     async def _probe_idle_workers(self, balancers: List[BalancerRegistration]) -> Dict[str, int]:
         results: Dict[str, int] = {}
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            for balancer in balancers:
-                logger.debug("Probing idle workers for balancer %s", balancer.id)
-                try:
-                    resp = await client.get(balancer.idle_endpoint())
-                    resp.raise_for_status()
-                    data = resp.json()
-                    idle = int(data.get("idle_workers", 0))
-                    if idle > 0:
-                        logger.info(
-                            "Balancer %s has %s idle workers", balancer.id, idle
-                        )
-                        results[balancer.id] = idle
-                except Exception:
-                    logger.exception("Failed to probe balancer %s; dropping from pool", balancer.id)
-                    await self.drop(balancer.id)
+        for balancer in balancers:
+            logger.debug("Probing idle workers for balancer %s", balancer.id)
+            try:
+                resp = await self._client.get(balancer.idle_endpoint())
+                resp.raise_for_status()
+                data = resp.json()
+                idle = int(data.get("idle_workers", 0))
+                if idle > 0:
+                    logger.info("Balancer %s has %s idle workers", balancer.id, idle)
+                    results[balancer.id] = idle
+            except Exception:
+                logger.exception("Failed to probe balancer %s; dropping from pool", balancer.id)
+                await self.drop(balancer.id)
         return results
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
 
     async def choose(self, strategy: str) -> BalancerRegistration:
         balancers = await self.list()
@@ -227,6 +228,10 @@ def create_app(settings: BrokerSettings) -> FastAPI:
         balancers = await pool.list()
         logger.info("Listing balancers; count=%s", len(balancers))
         return {"balancers": [b.__dict__ for b in balancers]}
+
+    @app.on_event("shutdown")
+    async def shutdown_event() -> None:
+        await pool.aclose()
 
     @app.websocket("/v1/text-to-speech/{voice_id}/stream-input")
     async def proxy_ws(ws: WebSocket, voice_id: str):
