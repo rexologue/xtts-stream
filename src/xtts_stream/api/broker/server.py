@@ -13,7 +13,7 @@ import websockets
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from xtts_stream.api.broker.settings import BROKER_CONFIG_ENV_VAR, BrokerSettings, load_broker_settings
+from settings import BROKER_CONFIG_ENV_VAR, BrokerSettings, load_broker_settings
 
 
 BROKER_HEADER = "x-xtts-broker"

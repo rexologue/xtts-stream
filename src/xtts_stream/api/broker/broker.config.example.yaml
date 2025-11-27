@@ -2,7 +2,7 @@
 
 service:
   host: 0.0.0.0
-  port: 9000
+  port: 19000
   # Load-balancing strategy across registered balancers: deep|wide|random
   strategy: deep
   # Timeout (seconds) when checking each balancer's idle worker endpoint

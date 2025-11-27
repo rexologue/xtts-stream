@@ -1,15 +1,12 @@
 services:
   xtts-broker:
     build:
-      context: ../../..
-      dockerfile: src/xtts_stream/api/broker/Dockerfile
+      context: .
+      dockerfile: Dockerfile
     container_name: xtts-broker
+    network_mode: host
     environment:
-      - XTTS_BROKER_CONFIG_FILE=/app/broker.config.example.yaml
-      - PYTHONPATH=/app/src
+      - XTTS_BROKER_CONFIG_FILE=/app/broker.config.yaml
     volumes:
-      - ../../..:/app:ro
-      - ../../../../broker.config.example.yaml:/app/broker.config.example.yaml:ro
-    ports:
-      - "9000:9000"
+      - /home/user5/xtts-stream/src/xtts_stream/api/broker/broker.config.yaml:/app/broker.config.yaml:ro
     restart: unless-stopped

@@ -1431,6 +1431,7 @@ CMakeUserPresets.json
 *.yaml
 !config.example.yaml
 !docker-compose.example.yaml
+!src/xtts_stream/api/broker/broker.config.example.yaml
 
 # Test results of scripts for usability
 *.sh
