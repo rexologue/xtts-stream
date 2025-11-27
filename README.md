@@ -100,6 +100,20 @@ The websocket service now runs as a balancer with multiple worker processes. Eac
 worker loads a single XTTS instance, and the balancer proxies incoming
 ElevenLabs-compatible `stream-input` requests to the first free worker.
 
+The balancer can run in two modes controlled by `service.standalone_mode` in the
+YAML configuration:
+
+- `standalone_mode: true` (default) — the balancer exposes the ElevenLabs
+  websocket directly and manages its local worker pool exactly as before.
+- `standalone_mode: false` — the balancer registers with a central Broker
+  service and only accepts websocket traffic that originates from the Broker.
+  Client applications should point to the Broker host/port instead of the
+  balancer.
+
+When Broker mode is enabled the balancer requires two extra fields in the YAML:
+`broker_host` and `broker_port`, which tell it where to register and receive
+forwarded websocket connections.
+
 Ensure your configuration file is in place (see the [Configuration](#configuration)
 section) and start the service with:
 
@@ -107,6 +121,26 @@ section) and start the service with:
 XTTS_CONFIG_FILE=/absolute/path/to/config.yaml PYTHONPATH=src \
   python -m xtts_stream.api.service.balancer
 ```
+
+### Broker service
+
+The Broker coordinates multiple balancers (potentially on separate machines)
+while keeping the ElevenLabs-compatible API stable for clients. It listens for
+client websocket connections, chooses a balancer based on the configured
+strategy (`deep`, `wide`, or `random`), and proxies the stream to that balancer.
+
+1. Copy and edit `broker.config.example.yaml`, then set
+   `XTTS_BROKER_CONFIG_FILE=/absolute/path/to/broker.config.yaml`.
+2. Start the Broker:
+
+```bash
+PYTHONPATH=src python -m xtts_stream.api.broker.server
+```
+
+Sample Docker assets live under `src/xtts_stream/api/broker/` for running the
+Broker independently from GPU-equipped balancer hosts. Each balancer set to
+`standalone_mode: false` will automatically register with the Broker on startup
+and expose its `/workers/idle` endpoint for capacity checks.
 
 Wrapper classes located under `src/xtts_stream/api/wrappers` provide reusable hooks
 for other models. Implement `xtts_stream.api.wrappers.base.StreamingTTSWrapper` for

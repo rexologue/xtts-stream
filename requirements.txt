@@ -25,3 +25,4 @@ redis==6.4.0
 ruaccent
 pyctcdecode
 kenlm
+httpx
