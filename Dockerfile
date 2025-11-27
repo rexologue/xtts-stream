@@ -43,6 +43,9 @@ RUN apt-get update \
 COPY requirements_locked.txt /app/requirements.txt
 RUN python3 -m pip install --no-cache-dir -r /app/requirements.txt && rm -rf /root/.cache/pip /tmp/*
 
+# --- Предзагрузка моделей ruaccent (turbo3.1) в образ ---
+RUN python3 -c "from ruaccent import RUAccent; a=RUAccent(); a.load(omograph_model_size='turbo3.1',use_dictionary=True,tiny_mode=False,device='CPU')"
+
 # ------------------------------------------------------------------------------
 # Copy the application code
 # ------------------------------------------------------------------------------

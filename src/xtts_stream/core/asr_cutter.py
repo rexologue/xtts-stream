@@ -80,7 +80,7 @@ class AsrCutter:
 
         padded_text = target_text
         if len(padded_text) < self.short_seq_threshold:
-            padded_text = padded_text + " " * (self.short_seq_threshold - len(padded_text))
+            padded_text = padded_text + " " * (self.short_seq_threshold - len(padded_text)) + padded_text
 
         normalized = normalize_text(padded_text)
         target_chars = int(self.seq_reconstruct_threshold * len(normalized))
