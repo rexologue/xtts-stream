@@ -129,7 +129,9 @@ def _config_path() -> Path:
 
 
 async def _proxy_stream(client_ws: WebSocket, balancer_ws_url: str) -> None:
-    async with websockets.connect(balancer_ws_url, max_size=None, extra_headers={BROKER_HEADER: "1"}) as backend:
+    async with websockets.connect(
+        balancer_ws_url, max_size=None, additional_headers={BROKER_HEADER: "1"}
+    ) as backend:
         logger.info("Proxying websocket traffic to %s", balancer_ws_url)
 
         async def client_to_balancer():
