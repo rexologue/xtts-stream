@@ -99,18 +99,37 @@ class BalancerPool:
             logger.error("No available balancers after probing")
             raise BalancerUnavailable("No balancer has idle workers")
 
+        idle_summary = ", ".join(
+            f"{b.id}:{idle_map[b.id]}" for b in sorted(available, key=lambda b: idle_map[b.id], reverse=True)
+        )
+        logger.info("Balancer availability (idle workers): %s", idle_summary)
+
         if strategy == "random":
             choice = random.choice(available)
-            logger.info("Selected balancer %s via random strategy", choice.id)
+            logger.info(
+                "Selected balancer %s via random strategy (idle_workers=%s)",
+                choice.id,
+                idle_map[choice.id],
+            )
             return choice
 
         available.sort(key=lambda b: idle_map[b.id])
         if strategy == "deep":
-            logger.info("Selected balancer %s via deep strategy", available[0].id)
-            return available[0]
+            choice = available[0]
+            logger.info(
+                "Selected balancer %s via deep strategy (lowest idle_workers=%s)",
+                choice.id,
+                idle_map[choice.id],
+            )
+            return choice
         if strategy == "wide":
-            logger.info("Selected balancer %s via wide strategy", available[-1].id)
-            return available[-1]
+            choice = available[-1]
+            logger.info(
+                "Selected balancer %s via wide strategy (highest idle_workers=%s)",
+                choice.id,
+                idle_map[choice.id],
+            )
+            return choice
 
         raise BalancerUnavailable(f"Unsupported strategy: {strategy}")
 
