@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import random
-from dataclasses import dataclass
 import logging
+from dataclasses import dataclass
 from typing import Dict, List
 
 import httpx
@@ -15,6 +15,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from settings import BROKER_CONFIG_ENV_VAR, BrokerSettings, BrokerSettingsError, load_broker_settings
+from logging_config import configure_logging
 
 
 BROKER_HEADER = "x-xtts-broker"
@@ -283,18 +284,27 @@ def create_app(settings: BrokerSettings) -> FastAPI:
     return app
 
 
-def run_broker(settings: BrokerSettings) -> None:
-    logger.info("Starting broker server on %s:%s", settings.service.host, settings.service.port)
+def run_broker(settings: BrokerSettings, log_config: dict | None = None) -> None:
+    config = log_config or configure_logging("broker")
+    log_level = str(config["loggers"][""]["level"]).lower()
+    logger.info(
+        "Starting broker server on %s:%s (strategy=%s)",
+        settings.service.host,
+        settings.service.port,
+        settings.service.strategy,
+    )
     uvicorn.run(
         create_app(settings),
         host=settings.service.host,
         port=settings.service.port,
-        log_level="info",
+        log_level=log_level,
+        log_config=config,
     )
 
 
 if __name__ == "__main__":
+    log_cfg = configure_logging("broker")
     cfg_path = _config_path()
     broker_settings = load_broker_settings(cfg_path)
-    run_broker(broker_settings)
+    run_broker(broker_settings, log_config=log_cfg)
 
