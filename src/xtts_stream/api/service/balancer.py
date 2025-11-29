@@ -2,26 +2,26 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
-import sys
 import random
 import socket
-import asyncio
+import sys
 from asyncio.streams import StreamReader, StreamWriter
-from pathlib import Path
-from typing import Optional
-from dataclasses import dataclass
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from pathlib import Path
 
-import websockets
 import httpx
-
 import uvicorn
-from fastapi.middleware.cors import CORSMiddleware
+import websockets
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 
-from xtts_stream.api.service.worker import run_worker
+from xtts_stream.api.service.logging_config import configure_logging
 from xtts_stream.api.service.settings import Settings, SettingsError, load_settings
+from xtts_stream.api.service.worker import run_worker
 
 
 CONFIG_ENV_VAR = "XTTS_CONFIG_FILE"
@@ -30,11 +30,15 @@ DEFAULT_REGISTER_RETRIES = 5
 REGISTER_ENDPOINT = "/broker/register"
 BROKER_HEADER = "x-xtts-broker"
 
+logger = logging.getLogger(__name__)
+
 
 def _config_path() -> Path:
     if CONFIG_ENV_VAR not in os.environ:
         raise RuntimeError("Environment variable XTTS_CONFIG_FILE must point to the service configuration file.")
-    return Path(os.environ[CONFIG_ENV_VAR]).expanduser().resolve(strict=False)
+    path = Path(os.environ[CONFIG_ENV_VAR]).expanduser().resolve(strict=False)
+    logger.debug("Using balancer configuration file at %s", path)
+    return path
 
 
 def _random_port() -> int:
@@ -43,6 +47,7 @@ def _random_port() -> int:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
                 s.bind(("127.0.0.1", port))
+                logger.debug("Selected random port %s for worker", port)
                 return port
             except OSError:
                 continue
@@ -58,8 +63,11 @@ def _balancer_id(settings: Settings) -> str:
 def _advertised_host(settings: Settings) -> str:
     if settings.service.host in {"0.0.0.0", "::"}:
         try:
-            return socket.gethostbyname(socket.gethostname())
+            resolved = socket.gethostbyname(socket.gethostname())
+            logger.debug("Advertised host resolved to %s", resolved)
+            return resolved
         except Exception:
+            logger.warning("Falling back to localhost for advertised host")
             return "127.0.0.1"
     return settings.service.host
 
@@ -77,8 +85,15 @@ async def _register_with_broker(settings: Settings, balancer_id: str) -> None:
     async with httpx.AsyncClient(timeout=10.0) as client:
         while True:
             try:
+                logger.info(
+                    "Registering balancer %s with broker %s (attempt %s)",
+                    balancer_id,
+                    broker_url,
+                    attempt + 1,
+                )
                 resp = await client.post(broker_url, json=payload)
                 resp.raise_for_status()
+                logger.info("Balancer %s registered with broker", balancer_id)
                 return
             except Exception as exc:  # noqa: BLE001
                 attempt += 1
@@ -99,6 +114,7 @@ class WorkerPool:
         self.config_path = config_path
         self.workers: list[WorkerHandle] = []
         self._lock = asyncio.Lock()
+        logger.debug("Initialized worker pool with config %s", config_path)
 
     async def _wait_for_ready(self, worker: WorkerHandle, timeout: float = 300.0) -> None:
         loop = asyncio.get_running_loop()
@@ -120,6 +136,7 @@ class WorkerPool:
 
             writer.close()
             await writer.wait_closed()
+            logger.info("Worker on port %s is ready", worker.port)
             return
 
     async def start(self, instances: int) -> None:
@@ -132,6 +149,7 @@ class WorkerPool:
                 env={**os.environ, CONFIG_ENV_VAR: str(self.config_path)},
             )
             self.workers.append(WorkerHandle(port=port, process=proc))
+            logger.info("Started worker process pid=%s on port %s", proc.pid, port)
 
         await asyncio.gather(*(self._wait_for_ready(worker) for worker in self.workers))
 
@@ -143,12 +161,14 @@ class WorkerPool:
                         raise RuntimeError("A worker process exited unexpectedly")
                     if not worker.busy:
                         worker.busy = True
+                        logger.debug("Acquired worker on port %s", worker.port)
                         return worker
             await asyncio.sleep(0.05)
 
     async def release(self, worker: WorkerHandle) -> None:
         async with self._lock:
             worker.busy = False
+            logger.debug("Released worker on port %s", worker.port)
 
     async def idle_workers(self) -> int:
         async with self._lock:
@@ -158,12 +178,14 @@ class WorkerPool:
         for worker in self.workers:
             if worker.process.returncode is None:
                 worker.process.terminate()
+                logger.info("Terminating worker pid=%s on port %s", worker.process.pid, worker.port)
         for worker in self.workers:
             if worker.process.returncode is None:
                 try:
                     await asyncio.wait_for(worker.process.wait(), timeout=5)
                 except asyncio.TimeoutError:
                     worker.process.kill()
+                    logger.warning("Force killed worker pid=%s on port %s", worker.process.pid, worker.port)
         self.workers.clear()
 
 
@@ -180,6 +202,7 @@ async def lifespan(_: FastAPI):
         settings = load_settings(cfg_path)
     except SettingsError as exc:
         raise RuntimeError(str(exc)) from exc
+    logger.info("Loaded balancer settings from %s", cfg_path)
 
     pool = WorkerPool(cfg_path)
     await pool.start(settings.service.instances)
@@ -191,10 +214,19 @@ async def lifespan(_: FastAPI):
     app.state.settings = settings
     app.state.pool = pool
     app.state.balancer_id = balancer_id
+    logger.info(
+        "Balancer %s ready on %s:%s with %s workers (standalone=%s)",
+        balancer_id,
+        settings.service.host,
+        settings.service.port,
+        settings.service.instances,
+        settings.service.standalone_mode,
+    )
 
     try:
         yield
     finally:
+        logger.info("Shutting down balancer %s", balancer_id)
         await pool.shutdown()
 
 
@@ -211,6 +243,7 @@ app.add_middleware(
 async def idle_workers():
     pool: WorkerPool = app.state.pool
     idle = await pool.idle_workers()
+    logger.debug("Reporting %s idle workers", idle)
     return {"idle_workers": idle}
 
 
@@ -219,16 +252,19 @@ async def ws_balancer(ws: WebSocket, voice_id: str):
     await ws.accept()
     pool: WorkerPool = app.state.pool
     settings: Settings = app.state.settings
+    logger.info("Accepted websocket request for voice_id=%s", voice_id)
 
     if not settings.service.standalone_mode:
         broker_header = ws.headers.get(BROKER_HEADER)
         if broker_header != "1":
+            logger.warning("Rejected websocket without broker header in broker-managed mode")
             await ws.close(code=1008, reason="Balancer is broker-managed; connect via Broker service")
             return
 
     worker = await pool.acquire()
     try:
         worker_url = _build_worker_url(worker, voice_id, ws)
+        logger.info("Forwarding websocket for voice_id=%s to worker on port %s", voice_id, worker.port)
 
         async with websockets.connect(worker_url, max_size=None) as backend:
 
@@ -263,12 +299,16 @@ async def ws_balancer(ws: WebSocket, voice_id: str):
         await pool.release(worker)
 
 
-def run_balancer(settings: Settings) -> None:
-    uvicorn.run(app, host=settings.service.host, port=settings.service.port, log_level="info")
+def run_balancer(settings: Settings, log_config: dict | None = None) -> None:
+    config = log_config or configure_logging("balancer")
+    log_level = str(config["loggers"][""]["level"]).lower()
+    logger.info("Starting balancer server on %s:%s", settings.service.host, settings.service.port)
+    uvicorn.run(app, host=settings.service.host, port=settings.service.port, log_level=log_level, log_config=config)
 
 
 if __name__ == "__main__":
+    log_cfg = configure_logging("balancer")
     cfg_path = _config_path()
     settings = load_settings(cfg_path)
-    run_balancer(settings)
+    run_balancer(settings, log_config=log_cfg)
 
