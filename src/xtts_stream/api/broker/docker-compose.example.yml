@@ -8,10 +8,6 @@ services:
     environment:
       - XTTS_BROKER_CONFIG_FILE=/app/broker.config.yaml
     volumes:
-      - /home/user5/xtts-stream/src/xtts_stream/api/broker/broker.config.yaml:/app/broker.config.yaml:ro
+      - /abs/path/to/broker.config.yaml:/app/broker.config.yaml:ro
     restart: unless-stopped
-    develop:
-      watch:
-        - path: /home/user5/xtts-stream/src/xtts_stream/api/broker
-          target: /app
-          action: sync
+

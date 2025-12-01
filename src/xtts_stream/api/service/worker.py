@@ -271,7 +271,7 @@ async def ws_stream_input(ws: WebSocket, voice_id: str):
     language: Optional[str] = qp.get("language")
     stream_chunk_size: int = int(qp.get("stream_chunk_size", "10"))
     overlap_wav_len: int = int(qp.get("overlap_wav_len", "512"))
-    left_ctx_seconds: Optional[float] = float(qp["left_context_seconds"]) if "left_context_seconds" in qp else 1.0
+    left_ctx_seconds: Optional[float] = float(qp["left_context_seconds"]) if "left_context_seconds" in qp else None
     sync_alignment: bool = qp.get("sync_alignment", "false").lower() == "true"
     inactivity_timeout: float = float(qp.get("inactivity_timeout", "20"))
 
