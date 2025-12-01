@@ -100,6 +100,12 @@ The websocket service now runs as a balancer with multiple worker processes. Eac
 worker loads a single XTTS instance, and the balancer proxies incoming
 ElevenLabs-compatible `stream-input` requests to the first free worker.
 
+Workers can preload a pool of reference voices by setting `model.voices_dir` in
+`config.yaml` to a directory containing `.mp3` samples. Each file is cached
+using its stem as the `voice_id`, matching the websocket path
+`/v1/text-to-speech/{voice_id}/stream-input`. Unknown `voice_id`s are served
+with the first successfully loaded voice as a default.
+
 The balancer can run in two modes controlled by `service.standalone_mode` in the
 YAML configuration:
 

@@ -20,7 +20,10 @@ service:
 model:
   # Directory containing XTTS artefacts (model.pth, config.json, vocab.json, ref_file)
   directory: /app/model
-  # Reference audio used for voice cloning.
+  # Directory with multiple reference voices (.mp3). When set, all samples are preloaded
+  # and served by name from the websocket path /v1/text-to-speech/{voice_id}/stream-input.
+  voices_dir: /app/voices
+  # Reference audio used for voice cloning when no voices_dir is provided.
   ref_file: /app/reference.wav
   # Language for the model.
   language: ru
