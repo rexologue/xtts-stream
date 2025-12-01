@@ -53,7 +53,9 @@ class StreamingTTSWrapper:
     #: Output sample rate used by :meth:`encode_audio`.
     sample_rate: int
 
-    async def stream(self, text: str, options: StreamGenerationConfig) -> AsyncIterator[np.ndarray]:
+    async def stream(
+        self, text: str, options: StreamGenerationConfig, *, voice_id: Optional[str] = None
+    ) -> AsyncIterator[np.ndarray]:
         """Yield floating point audio frames for ``text``.
 
         Implementations are free to use blocking model APIs – the helper can

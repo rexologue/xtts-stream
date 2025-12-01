@@ -42,7 +42,8 @@ class ModelSettings:
     config_path: Path
     checkpoint_path: Path
     tokenizer_path: Optional[Path]
-    speaker_wav: Path
+    speaker_wav: Optional[Path]
+    voices_dir: Optional[Path]
     language: str
     device: str = "auto"
     enable_accentizer: bool = True
@@ -129,8 +130,20 @@ def load_settings(path: Path) -> Settings:
     checkpoint = _require_path(model_dir, "model.pth", kind="file")
     config_path = _require_path(model_dir, "config.json", kind="file")
     tokenizer_path = _require_path(model_dir, "vocab.json", kind="file")
-    speaker_rel = model_raw.get("ref_file", "ref.wav")
-    speaker_wav = _require_path(model_dir, speaker_rel, kind="file")
+
+    voices_dir = Path(model_raw["voices_dir"]).expanduser().resolve() if "voices_dir" in model_raw else None
+    if voices_dir is not None:
+        if not voices_dir.exists() or not voices_dir.is_dir():
+            raise SettingsError(f"Invalid voices_dir: {voices_dir}")
+
+    speaker_wav = None
+    if voices_dir is None:
+        speaker_rel = model_raw.get("ref_file", "ref.wav")
+        speaker_wav = _require_path(model_dir, speaker_rel, kind="file")
+    elif model_raw.get("ref_file"):
+        candidate = (model_dir / model_raw["ref_file"]).expanduser().resolve()
+        if candidate.exists() and candidate.is_file():
+            speaker_wav = candidate
 
     model = ModelSettings(
         directory=model_dir,
@@ -138,6 +151,7 @@ def load_settings(path: Path) -> Settings:
         checkpoint_path=checkpoint,
         tokenizer_path=tokenizer_path,
         speaker_wav=speaker_wav,
+        voices_dir=voices_dir,
         language=language,
         device=device,
         enable_accentizer=enable_accentizer,

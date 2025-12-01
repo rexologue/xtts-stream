@@ -1,8 +1,6 @@
-"""Shared logging configuration for balancer and worker processes."""
-
-"""Unified console logging for balancer and workers."""
-
 from __future__ import annotations
+
+"""Shared logging configuration for balancer and worker processes."""
 
 import logging
 import logging.config

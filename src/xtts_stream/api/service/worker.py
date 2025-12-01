@@ -247,10 +247,12 @@ tts_wrapper: Optional[StreamingTTSWrapper] = None
 gpu_sema = asyncio.Semaphore(1)
 
 
-async def stream_audio(wrapper: Optional[StreamingTTSWrapper], text: str, options: StreamGenerationConfig) -> AsyncIterator[np.ndarray]:
+async def stream_audio(
+    wrapper: Optional[StreamingTTSWrapper], text: str, options: StreamGenerationConfig, *, voice_id: Optional[str]
+) -> AsyncIterator[np.ndarray]:
     if wrapper is None:
         raise RuntimeError("TTS wrapper has not been initialised")
-    async for frame in wrapper.stream(text, options):
+    async for frame in wrapper.stream(text, options, voice_id=voice_id):
         yield frame
 
 
@@ -369,7 +371,7 @@ async def ws_stream_input(ws: WebSocket, voice_id: str):
                     async with ctx.lock, gpu_sema:
                         aggregator = PacketAggregator(schedule_frames=ctx.frame_schedule or [], default_frames_per_packet=1)
 
-                        async for frame in stream_audio(tts_wrapper, pending, ctx.generation_options):
+                        async for frame in stream_audio(tts_wrapper, pending, ctx.generation_options, voice_id=voice_id):
                             resampled = _maybe_resample_frame(frame, source_sample_rate, sr)
                             raw_bytes = pcm_from_float(resampled)
                             frame_ms = pacer.duration_ms_from_pcm_bytes(len(raw_bytes))
@@ -407,7 +409,7 @@ async def ws_stream_input(ws: WebSocket, voice_id: str):
                     async with ctx.lock, gpu_sema:
                         aggregator = PacketAggregator(schedule_frames=ctx.frame_schedule or [], default_frames_per_packet=1)
 
-                        async for frame in stream_audio(tts_wrapper, pending, ctx.generation_options):
+                        async for frame in stream_audio(tts_wrapper, pending, ctx.generation_options, voice_id=voice_id):
                             resampled = _maybe_resample_frame(frame, source_sample_rate, sr)
                             raw_bytes = pcm_from_float(resampled)
                             frame_ms = pacer.duration_ms_from_pcm_bytes(len(raw_bytes))
